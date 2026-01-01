@@ -1,3 +1,9 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
+
+
 class KernelBasis3D(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -114,6 +120,7 @@ class ShapedEncoder3D(nn.Module):
         x = self.down1(x)
         x = self.down2(x)
         return x
+
 
 
           
