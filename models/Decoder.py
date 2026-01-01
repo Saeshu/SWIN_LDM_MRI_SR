@@ -1,5 +1,8 @@
 #Need to add skip connections
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
 class Decoder3D(nn.Module):
     def __init__(self, in_ch=64, out_ch=1, base_ch=32):
         super().__init__()
@@ -21,3 +24,4 @@ class Decoder3D(nn.Module):
         z = self.up2(z)  # 16 → 32
         z = self.up3(z)  # 32 → 64
         return z
+
