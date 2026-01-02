@@ -7,19 +7,26 @@ from einops import rearrange
 class KernelBasis3D(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
+
         self.k1 = nn.Conv3d(in_ch, out_ch, 1, padding=0)
-        self.k3 = nn.Conv3d(in_ch, out_ch, 3, padding=1)
-        self.k5 = nn.Conv3d(in_ch, out_ch, 5, padding=2)
-        self.k7 = nn.Conv3d(in_ch, out_ch, 7, padding=3)
+
+        self.k333 = nn.Conv3d(in_ch, out_ch, 3, padding=1)
+        self.k555 = nn.Conv3d(in_ch, out_ch, 5, padding=2)
+        self.k133 = nn.Conv3d(in_ch, out_ch, (1, 3, 3), padding=(0, 1, 1))
+        self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
+        self.k331 = nn.Conv3d(in_ch, out_ch, (3, 3, 1), padding=(1, 1, 0))
 
     def forward(self, x):
         return torch.stack([
             self.k1(x),
-            self.k3(x),
-            self.k5(x),
-            self.k7(x)
+            self.k333(x),
+            self.k555(x),
+            self.k133(x),
+            self.k313(x),
+            self.k331(x),
+            
         ], dim=1)
-        # → [B, 4, C, D, H, W]
+        # shape: [B, 5, C, D, H, W]
 
 class SwinBlock3D(nn.Module):
     """
@@ -61,7 +68,7 @@ class SwinBlock3D(nn.Module):
         return x
 
 class SwinMixingField3D(nn.Module):
-    def __init__(self, in_ch=1, num_kernels=4):
+    def __init__(self, in_ch, num_kernels=6):
         super().__init__()
         self.embed = nn.Conv3d(in_ch, num_kernels, 3, padding=1)
         self.block1 = SwinBlock3D(num_kernels)
@@ -72,7 +79,7 @@ class SwinMixingField3D(nn.Module):
         alpha = self.block1(alpha)
         alpha = self.block2(alpha)
         return torch.softmax(alpha, dim=1)
-        # → [B, 4, D, H, W]
+
 class AttentionShapedConv3D(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
