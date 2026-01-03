@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from models.ShapedEncoder3D import ShapedEncoder3D
-from models.Decoder3D import Decoder3D
+from models.Decoder import Decoder3D
 from Data.dataset import MRIDataset
 from models.utils import save_checkpoint
 
@@ -90,3 +90,4 @@ if __name__ == "__main__":
         data_root="/content/drive/MyDrive/mri_dataset/train",
         device=device,
     )
+
