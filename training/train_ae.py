@@ -1,12 +1,13 @@
+import os
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from models.encoder import ShapedEncoder3D
-from models.decoder import Decoder3D
-from data.dataset import MRIDataset
-from utils.checkpoint import save_checkpoint
+from models.ShapedEncoder3D import ShapedEncoder3D
+from models.Decoder3D import Decoder3D
+from Data.dataset import MRIDataset
+from models.utils import save_checkpoint
 
 
 def train_autoencoder(
@@ -18,17 +19,28 @@ def train_autoencoder(
     log_every=100,
     save_every=2000,
 ):
+    os.makedirs("checkpoints", exist_ok=True)
+
     # -------------------------
     # Dataset
     # -------------------------
     dataset = MRIDataset(data_root)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=True,
+    )
 
     # -------------------------
     # Models
     # -------------------------
     encoder = ShapedEncoder3D().to(device)
-    decoder = Decoder3D().to(device)
+    decoder = Decoder3D(in_ch=32).to(device)
+
+    encoder.train()
+    decoder.train()
 
     params = list(encoder.parameters()) + list(decoder.parameters())
     optimizer = torch.optim.Adam(params, lr=lr)
@@ -37,7 +49,7 @@ def train_autoencoder(
     pbar = tqdm(total=num_steps)
 
     while step < num_steps:
-        for x in loader:
+        for x, _ in loader:
             if step >= num_steps:
                 break
 
@@ -73,4 +85,8 @@ def train_autoencoder(
 
 
 if __name__ == "__main__":
-    train_autoencoder()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    train_autoencoder(
+        data_root="/content/drive/MyDrive/mri_dataset/train",
+        device=device,
+    )
