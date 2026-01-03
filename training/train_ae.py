@@ -49,21 +49,11 @@ def train_autoencoder(
     pbar = tqdm(total=num_steps)
 
     while step < num_steps:
-        for x, _ in loader:
-            if step >= num_steps:
-                break
-
-            x = x.to(device)
-
-            # forward
-            z = encoder(x)
+        for hr in loader:
+            hr = hr.to(device)
+            z = encoder(hr)
             recon = decoder(z)
-
-            loss = F.l1_loss(recon, x)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            loss = F.l1_loss(recon, hr)
 
             if step % log_every == 0:
                 print(f"[AE] step {step:06d} | loss {loss.item():.4e}")
@@ -82,7 +72,7 @@ def train_autoencoder(
             pbar.update(1)
 
     pbar.close()
-
+  
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
