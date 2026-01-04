@@ -11,7 +11,7 @@ class KernelBasis3D(nn.Module):
         self.k1 = nn.Conv3d(in_ch, out_ch, 1, padding=0)
 
         self.k333 = nn.Conv3d(in_ch, out_ch, 3, padding=1)
-        self.k555 = nn.Conv3d(in_ch, out_ch, 5, padding=2)
+        
         self.k133 = nn.Conv3d(in_ch, out_ch, (1, 3, 3), padding=(0, 1, 1))
         self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
         self.k331 = nn.Conv3d(in_ch, out_ch, (3, 3, 1), padding=(1, 1, 0))
@@ -20,7 +20,6 @@ class KernelBasis3D(nn.Module):
         return torch.stack([
             self.k1(x),
             self.k333(x),
-            self.k555(x),
             self.k133(x),
             self.k313(x),
             self.k331(x),
@@ -66,9 +65,9 @@ class SwinBlock3D(nn.Module):
         x = rearrange(x_tokens, 'b (d h w) c -> b c d h w',
                       d=D, h=H, w=W)
         return x
-
+        
 class SwinMixingField3D(nn.Module):
-    def __init__(self, in_ch, num_kernels=6):
+    def __init__(self, in_ch, num_kernels=5):
         super().__init__()
         self.embed = nn.Conv3d(in_ch, num_kernels, 3, padding=1)
         self.block1 = SwinBlock3D(num_kernels)
@@ -124,9 +123,9 @@ class ShapedEncoder3D(nn.Module):
         self.down2 = ShapedDownBlock3D(base_ch, base_ch * 2)
 
     def forward(self, x):
-        x = self.down1(x)
-        x = self.down2(x)
-        return x
+        x1 = self.down1(x)
+        x2 = self.down2(x1)
+        return x2, x1
 
 
 
