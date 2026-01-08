@@ -37,7 +37,31 @@ def timestep_embedding(timesteps, dim):
     return emb
 
 
+def match_shape(x, ref):
+    """
+    Match x spatial shape to ref by symmetric padding or cropping.
+    """
+    _, _, D, H, W = ref.shape
+    d, h, w = x.shape[2:]
 
+    pd = D - d
+    ph = H - h
+    pw = W - w
+
+    # Pad if too small
+    if pd > 0 or ph > 0 or pw > 0:
+        x = F.pad(
+            x,
+            (
+                pw // 2, pw - pw // 2,
+                ph // 2, ph - ph // 2,
+                pd // 2, pd - pd // 2,
+            )
+        )
+
+    # Crop if too large
+    x = x[:, :, :D, :H, :W]
+    return x
 
 def random_patch_3d(vol, patch_size=64):
     """
