@@ -3,19 +3,9 @@ import torch
 
 @torch.no_grad()
 def ddim_step(eps_model, z, t, t_prev, const, cond=None):
-    """
-    One DDIM step (supports conditional or unconditional)
-
-    z:       [B, C, D, H, W]
-    t:       [B]
-    t_prev:  scalar or [B]
-    cond:    conditioning latent or None
-    """
-
     device = z.device
     B = z.shape[0]
 
-    # gather alpha bars safely
     alpha_bar_t = const.alpha_bars[t].view(B, 1, 1, 1, 1)
 
     if isinstance(t_prev, int):
@@ -25,30 +15,39 @@ def ddim_step(eps_model, z, t, t_prev, const, cond=None):
         alpha_bar_prev = const.alpha_bars[t_prev].view(B, 1, 1, 1, 1)
 
     # predict noise
-    if cond is None:
-        eps = eps_model(z, t)
-    else:
-        eps = eps_model(z, t, cond)
+    eps = eps_model(z, t, cond) if cond is not None else eps_model(z, t)
 
     # predict x0
-    x0 = (z - torch.sqrt(1.0 - alpha_bar_t) * eps) / torch.sqrt(alpha_bar_t)
+    x0 = (z - torch.sqrt(1 - alpha_bar_t) * eps) / torch.sqrt(alpha_bar_t)
 
-    # DDIM update (eta = 0)
+    # DDIM (eta = 0)
     z_prev = (
         torch.sqrt(alpha_bar_prev) * x0 +
-        torch.sqrt(1.0 - alpha_bar_prev) * eps
+        torch.sqrt(1 - alpha_bar_prev) * eps
     )
 
     return z_prev
 
+
 @torch.no_grad()
-def ddim_sample(eps_model, shape, schedule, const, cond=None, steps=50):
+def ddim_sample(
+    eps_model,
+    shape,
+    schedule,
+    const,
+    cond=None,
+    steps=50,
+    t_min=200
+):
     device = next(eps_model.parameters()).device
 
     z = torch.randn(shape, device=device)
 
     timesteps = torch.linspace(
-        schedule.T - 1, 0, steps, device=device
+        schedule.T - 1,
+        t_min,
+        steps,
+        device=device
     ).long()
 
     for i in range(len(timesteps) - 1):
@@ -65,14 +64,3 @@ def ddim_sample(eps_model, shape, schedule, const, cond=None, steps=50):
         )
 
     return z
-
-#sanity test
-with torch.no_grad():
-    z = ddim_sample(
-        eps_model,
-        shape=z_hr.shape,
-        schedule=schedule,
-        const=const,
-        cond=z_cond,
-        steps=20
-    )
