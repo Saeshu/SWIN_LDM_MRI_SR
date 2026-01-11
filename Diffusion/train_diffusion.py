@@ -80,18 +80,39 @@ def train_diffusion(
             )
 
             # sample timestep
+            # -------------------------
+            # timestep sampling (biased for partial diffusion)
+            # -------------------------
             B = z_hr.shape[0]
-            t = torch.randint(0, schedule.T, (B,), device=device)
-
+            
+            u = torch.rand(B, device=device)
+            t = (u ** 2 * schedule.T).long()
+            t = torch.clamp(t, 0, schedule.T - 1)
+            
+            # -------------------------
             # forward diffusion
+            # -------------------------
             noise = torch.randn_like(z_hr)
             alpha_bar = schedule.alpha_bars[t].view(B, 1, 1, 1, 1)
+            
             z_t = torch.sqrt(alpha_bar) * z_hr + torch.sqrt(1 - alpha_bar) * noise
-
+            
+            # -------------------------
+            # noise conditioning too (key for partdiff stability)
+            # -------------------------
+            cond_noise = torch.randn_like(z_cond)
+            z_cond_t = (
+                torch.sqrt(alpha_bar) * z_cond +
+                torch.sqrt(1 - alpha_bar) * cond_noise
+            )
+            
+            # -------------------------
             # predict noise
-            pred = eps_model(z_t, t, z_cond)
-
+            # -------------------------
+            pred = eps_model(z_t, t, z_cond_t)
+            
             loss = F.mse_loss(pred, noise)
+
 
             optimizer.zero_grad()
             loss.backward()
@@ -120,3 +141,4 @@ if __name__ == "__main__":
         data_root="data/",
         ae_ckpt="checkpoints/ae_step_20000.pt"
     )
+
