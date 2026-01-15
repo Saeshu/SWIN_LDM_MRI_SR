@@ -20,7 +20,7 @@ def train_diffusion(
     log_every=100,
     save_every=2000,
     patch_size=64,
-    t_min=200,
+    t_min=0,
 ):
     # -------------------------
     # Dataset
@@ -49,8 +49,8 @@ def train_diffusion(
     # Diffusion model
     # -------------------------
     eps_model = ConditionalEpsUNet3D(
-        z_ch=encoder.latent_dim,
-        cond_ch=encoder.latent_dim
+        z_ch=32,
+        cond_ch=32
     ).to(device)
 
     optimizer = torch.optim.Adam(eps_model.parameters(), lr=lr)
@@ -103,7 +103,7 @@ def train_diffusion(
         z_t = torch.sqrt(alpha_bar) * z_hr + torch.sqrt(1 - alpha_bar) * noise
 
         # also corrupt conditioning (important)
-        cond_noise = 0.5 * torch.randn_like(z_cond)
+        cond_noise = 0.1 * torch.randn_like(z_cond)
         z_cond_t = (
             torch.sqrt(alpha_bar) * z_cond +
             torch.sqrt(1 - alpha_bar) * cond_noise
