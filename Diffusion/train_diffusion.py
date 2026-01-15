@@ -16,7 +16,7 @@ def train_diffusion(
     ae_ckpt,
     device="cuda",
     lr=2e-4,
-    num_steps=50000,
+    num_steps=10000,
     log_every=100,
     save_every=2000,
     patch_size=64,
@@ -56,7 +56,7 @@ def train_diffusion(
     optimizer = torch.optim.Adam(eps_model.parameters(), lr=lr)
     schedule = DiffusionSchedule(T=1000, device=device)
 
-    step = 0
+    step = 1
     pbar = tqdm(total=num_steps)
 
     while step < num_steps:
@@ -102,13 +102,15 @@ def train_diffusion(
 
         z_t = torch.sqrt(alpha_bar) * z_hr + torch.sqrt(1 - alpha_bar) * noise
 
-        # also corrupt conditioning (important)
-        cond_noise = 0.1 * torch.randn_like(z_cond)
-        z_cond_t = (
-            torch.sqrt(alpha_bar) * z_cond +
-            torch.sqrt(1 - alpha_bar) * cond_noise
-        )
-
+        if step < 5000:
+            z_cond_t = z_cond
+        #change after first run!
+        else:
+            cond_noise = 0.1 * torch.randn_like(z_cond)
+            z_cond_t = (
+                torch.sqrt(alpha_bar) * z_cond +
+                torch.sqrt(1 - alpha_bar) * cond_noise
+            )
         # -------------------------
         # predict noise
         # -------------------------
@@ -128,8 +130,13 @@ def train_diffusion(
                     "eps_model": eps_model.state_dict(),
                     "step": step,
                 },
-                f"checkpoints/diffusion_step_{step}.pt",
+                f"checkpoints/2nd_diffusion_step_{step}.pt",
             )
+        if step % 1000 == 0 and step > 0:
+            t0 = torch.zeros_like(t)
+            z0 = z_hr
+            pred0 = eps_model(z0, t0, z_cond)
+            print("Identity eps norm:", pred0.abs().mean().item())
 
         step += 1
         pbar.update(1)
