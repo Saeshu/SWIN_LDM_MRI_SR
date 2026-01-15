@@ -59,16 +59,18 @@ class Decoder3D(nn.Module):
         # final projection to input channels
         self.out = nn.Conv3d(base_ch, out_ch, kernel_size=1)
 
-    def forward(self, z, skip1):
-        x = self.up1(z)                 # 30 → 60
+    def forward(self, z, skip1=None):
+        x = self.up1(z)
+    
+        if skip1 is None:
+            skip1 = torch.zeros_like(x)
+    
         skip1 = match_shape(skip1, x)
-
         x = torch.cat([x, skip1], dim=1)
         x = self.fuse1(x)
-
-        x = self.up2(x)                 # 60 → ~120
+    
+        x = self.up2(x)
         x = self.out(x)
-
         return x
    
 
