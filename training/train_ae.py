@@ -309,7 +309,7 @@ if __name__ == "__main__":
         "num_steps": 20000,
         "log_every": 100,
         "save_every": 2000,
-        "use_skip_connections": True,  # Set False to test SimpleShapedDecoder3D first
+        "use_skip_connections": False,  # Set False to test SimpleShapedDecoder3D first
         "base_ch": 16,             # Use 32 for more capacity (but 2x memory)
         "checkpoint_path": None,   # Set to resume training
     }
@@ -330,3 +330,4 @@ if __name__ == "__main__":
     #     use_skip_connections=config["use_skip_connections"],
     #     base_ch=config["base_ch"],
     # )
+
