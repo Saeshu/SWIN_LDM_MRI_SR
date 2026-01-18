@@ -1,3 +1,8 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from models.ShapedEncoder3D import *
+
 def match_shape(x, ref):
     """
     Match x spatial shape to ref by symmetric padding or cropping.
@@ -168,7 +173,7 @@ class KernelBasis3D(nn.Module):
         self.k1 = nn.Conv3d(in_ch, out_ch, 1, padding=0)
         self.k333 = nn.Conv3d(in_ch, out_ch, 3, padding=1)
         self.k133 = nn.Conv3d(in_ch, out_ch, (1, 3, 3), padding=(0, 1, 1))
-        self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
+        #self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
         self.k331 = nn.Conv3d(in_ch, out_ch, (3, 3, 1), padding=(1, 1, 0))
         
     def forward(self, x):
@@ -176,14 +181,14 @@ class KernelBasis3D(nn.Module):
             self.k1(x),
             self.k333(x),
             self.k133(x),
-            self.k313(x),
+            #self.k313(x),
             self.k331(x),
         ], dim=1)  # [B, 5, C_out, D, H, W]
 
 
 class SwinMixingField3D(nn.Module):
     """Uses proper SWIN attention to generate kernel mixing weights."""
-    def __init__(self, in_ch, num_kernels=5, window_size=4, num_heads=4, temperature=1.0):
+    def __init__(self, in_ch, num_kernels=4, window_size=4, num_heads=4, temperature=1.0):
         super().__init__()
         self.temperature = temperature
         self.window_size = window_size
@@ -287,137 +292,3 @@ class ShapedEncoder3D(nn.Module):
         x1 = self.down1(x)
         x2 = self.down2(x1)
         return x2, x1
-
-
-# ============================================================================
-# Testing
-# ============================================================================
-
-if __name__ == "__main__":
-    print("="*70)
-    print("Testing Encoder-Decoder Architecture")
-    print("="*70)
-    
-    # Initialize models
-    encoder = ShapedEncoder3D(in_ch=1, base_ch=16)
-    simple_decoder = SimpleShapedDecoder3D(out_ch=1, base_ch=16)
-    skip_decoder = ShapedDecoder3D(out_ch=1, base_ch=16)
-    
-    # Test input
-    batch_size = 2
-    x_input = torch.randn(batch_size, 1, 64, 64, 64)
-    print(f"\n[Input] Shape: {x_input.shape}")
-    
-    # ========================================================================
-    # Test 1: Encoder
-    # ========================================================================
-    print("\n" + "-"*70)
-    print("Test 1: Encoder Forward Pass")
-    print("-"*70)
-    
-    latent, skip1 = encoder(x_input)
-    print(f"  Latent (z):        {latent.shape}")
-    print(f"  Skip connection:   {skip1.shape}")
-    
-    # ========================================================================
-    # Test 2: Simple Decoder (No Skips)
-    # ========================================================================
-    print("\n" + "-"*70)
-    print("Test 2: Simple Decoder (No Skip Connections)")
-    print("-"*70)
-    
-    reconstructed_simple = simple_decoder(latent)
-    print(f"  Reconstructed:     {reconstructed_simple.shape}")
-    print(f"  Expected:          {x_input.shape}")
-    print(f"  Match: {reconstructed_simple.shape == x_input.shape}")
-    
-    # Calculate reconstruction error
-    recon_error = F.mse_loss(reconstructed_simple, x_input)
-    print(f"  Reconstruction MSE: {recon_error.item():.6f}")
-    print(f"  Note: High error is expected (random weights, no training)")
-    
-    # ========================================================================
-    # Test 3: Decoder with Skip Connections
-    # ========================================================================
-    print("\n" + "-"*70)
-    print("Test 3: Decoder with Skip Connections")
-    print("-"*70)
-    
-    reconstructed_skip = skip_decoder(latent, skip1)
-    print(f"  Reconstructed:     {reconstructed_skip.shape}")
-    print(f"  Expected:          {x_input.shape}")
-    print(f"  Match: {reconstructed_skip.shape == x_input.shape}")
-    
-    recon_error_skip = F.mse_loss(reconstructed_skip, x_input)
-    print(f"  Reconstruction MSE: {recon_error_skip.item():.6f}")
-    
-    # ========================================================================
-    # Test 4: Different Input Sizes (Dynamic Resolution)
-    # ========================================================================
-    print("\n" + "-"*70)
-    print("Test 4: Dynamic Resolution Handling")
-    print("-"*70)
-    
-    test_sizes = [
-        (48, 48, 48),
-        (32, 32, 32),
-        (80, 80, 80),
-    ]
-    
-    for size in test_sizes:
-        x_test = torch.randn(1, 1, *size)
-        latent_test, skip1_test = encoder(x_test)
-        recon_test = skip_decoder(latent_test, skip1_test)
-        print(f"  Input {size} → Latent {tuple(latent_test.shape[2:])} → Output {tuple(recon_test.shape[2:])}")
-    
-    # ========================================================================
-    # Test 5: Full Autoencoder Pipeline
-    # ========================================================================
-    print("\n" + "-"*70)
-    print("Test 5: End-to-End Autoencoder Pipeline")
-    print("-"*70)
-    
-    class ShapedAutoencoder3D(nn.Module):
-        def __init__(self, in_ch=1, base_ch=16):
-            super().__init__()
-            self.encoder = ShapedEncoder3D(in_ch, base_ch)
-            self.decoder = ShapedDecoder3D(in_ch, base_ch)
-            
-        def forward(self, x):
-            latent, skip1 = self.encoder(x)
-            reconstruction = self.decoder(latent, skip1)
-            return reconstruction, latent
-    
-    autoencoder = ShapedAutoencoder3D(in_ch=1, base_ch=16)
-    recon_ae, latent_ae = autoencoder(x_input)
-    print(f"  Input:             {x_input.shape}")
-    print(f"  Latent:            {latent_ae.shape}")
-    print(f"  Reconstruction:    {recon_ae.shape}")
-    
-    compression_ratio = (x_input.numel() / latent_ae.numel())
-    print(f"  Compression ratio: {compression_ratio:.2f}x")
-    
-    # ========================================================================
-    # Model Statistics
-    # ========================================================================
-    print("\n" + "="*70)
-    print("Model Statistics")
-    print("="*70)
-    
-    def count_parameters(model):
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
-    print(f"  Encoder parameters:        {count_parameters(encoder):,}")
-    print(f"  Simple Decoder parameters: {count_parameters(simple_decoder):,}")
-    print(f"  Skip Decoder parameters:   {count_parameters(skip_decoder):,}")
-    print(f"  Total Autoencoder:         {count_parameters(autoencoder):,}")
-    
-    print("\n" + "="*70)
-    print("✓ All tests passed successfully!")
-    print("="*70)
-    
-    print("\nNext Steps:")
-    print("  1. Train SimpleShapedDecoder3D to validate encoder")
-    print("  2. Visualize kernel selection patterns (alpha weights)")
-    print("  3. Build diffusion decoder with timestep conditioning")
-    print("  4. Add low-resolution conditioning for super-resolution")
