@@ -281,7 +281,7 @@ class KernelBasis3D(nn.Module):
         self.k1 = nn.Conv3d(in_ch, out_ch, 1, padding=0)
         self.k333 = nn.Conv3d(in_ch, out_ch, 3, padding=1)
         self.k133 = nn.Conv3d(in_ch, out_ch, (1, 3, 3), padding=(0, 1, 1))
-        self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
+        #self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
         self.k331 = nn.Conv3d(in_ch, out_ch, (3, 3, 1), padding=(1, 1, 0))
         
     def forward(self, x):
@@ -289,14 +289,14 @@ class KernelBasis3D(nn.Module):
             self.k1(x),
             self.k333(x),
             self.k133(x),
-            self.k313(x),
+            #self.k313(x),
             self.k331(x),
         ], dim=1)  # [B, 5, C_out, D, H, W]
 
 
 class SwinMixingField3D(nn.Module):
     """Uses proper SWIN attention to generate kernel mixing weights."""
-    def __init__(self, in_ch, num_kernels=5, window_size=4, num_heads=4, temperature=1.0):
+    def __init__(self, in_ch, num_kernels=4, window_size=4, num_heads=4, temperature=1.0):
         super().__init__()
         self.temperature = temperature
         self.window_size = window_size
@@ -400,55 +400,3 @@ class ShapedEncoder3D(nn.Module):
         x1 = self.down1(x)
         x2 = self.down2(x1)
         return x2, x1
-
-
-# ============================================================================
-# Testing
-# ============================================================================
-
-if __name__ == "__main__":
-    print("="*70)
-    print("Testing Dynamic Resolution Tracking")
-    print("="*70)
-    
-    model = ShapedEncoder3D(in_ch=1, base_ch=16)
-    
-    # Test 1: Standard power-of-2 resolution
-    print("\n[Test 1] Standard 64×64×64 input:")
-    x1 = torch.randn(2, 1, 64, 64, 64)
-    print(f"  Input: {x1.shape}")
-    x2, x1_out = model(x1)
-    print(f"  After down1: {x1_out.shape} (expected: 2×16×32×32×32)")
-    print(f"  After down2: {x2.shape} (expected: 2×32×16×16×16)")
-    
-    # Test 2: Non-standard resolution
-    print("\n[Test 2] Non-standard 48×48×48 input:")
-    x2_input = torch.randn(2, 1, 48, 48, 48)
-    print(f"  Input: {x2_input.shape}")
-    x2_down2, x2_down1 = model(x2_input)
-    print(f"  After down1: {x2_down1.shape} (expected: 2×16×24×24×24)")
-    print(f"  After down2: {x2_down2.shape} (expected: 2×32×12×12×12)")
-    
-    # Test 3: Odd resolution that requires window size adjustment
-    print("\n[Test 3] Odd 40×40×40 input (will auto-adjust window size):")
-    x3 = torch.randn(2, 1, 40, 40, 40)
-    print(f"  Input: {x3.shape}")
-    x3_down2, x3_down1 = model(x3)
-    print(f"  After down1: {x3_down1.shape} (expected: 2×16×20×20×20)")
-    print(f"  After down2: {x3_down2.shape} (expected: 2×32×10×10×10)")
-    
-    # Test 4: Very small resolution
-    print("\n[Test 4] Small 16×16×16 input:")
-    x4 = torch.randn(2, 1, 16, 16, 16)
-    print(f"  Input: {x4.shape}")
-    x4_down2, x4_down1 = model(x4)
-    print(f"  After down1: {x4_down1.shape} (expected: 2×16×8×8×8)")
-    print(f"  After down2: {x4_down2.shape} (expected: 2×32×4×4×4)")
-    
-    print("\n" + "="*70)
-    print("✓ All tests passed! Dynamic resolution tracking works correctly.")
-    print("="*70)
-    
-    # Show memory usage
-    print(f"\nModel Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Trainable Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
