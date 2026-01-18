@@ -33,40 +33,25 @@ class Decoder3D(nn.Module):
     def __init__(self, out_ch=1, base_ch=16):
         super().__init__()
 
-        # z: [B, 32, 30, 36, 30] → [B, 16, 60, 72, 60]
-        self.up1 = nn.ConvTranspose3d(
-            in_channels=base_ch * 2,
-            out_channels=base_ch,
-            kernel_size=2,
-            stride=2
-        )
-
-        self.fuse1 = nn.Sequential(
-            nn.Conv3d(base_ch + base_ch, base_ch, kernel_size=3, padding=1),
+        # z: [B, 32, D/4, H/4, W/4] → [B, 16, D/2, H/2, W/2]
+        self.up1 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False),
+            nn.Conv3d(base_ch * 2, base_ch, kernel_size=3, padding=1),
             nn.InstanceNorm3d(base_ch),
             nn.SiLU()
         )
 
-        # [B, 16, 60, 72, 60] → [B, 16, 120, 144, 120]
-        self.up2 = nn.ConvTranspose3d(
-            in_channels=base_ch,
-            out_channels=base_ch,
-            kernel_size=2,
-            stride=2
+        # [B, 16, D/2, H/2, W/2] → [B, 16, D, H, W]
+        self.up2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False),
+            nn.Conv3d(base_ch, base_ch, kernel_size=3, padding=1),
+            nn.InstanceNorm3d(base_ch),
+            nn.SiLU()
         )
 
-        # final projection to input channels
         self.out = nn.Conv3d(base_ch, out_ch, kernel_size=1)
 
-    def forward(self, z, skip1):
-        x = self.up1(z)                 # 30 → 60
-        skip1 = match_shape(skip1, x)
-
-        x = torch.cat([x, skip1], dim=1)
-        x = self.fuse1(x)
-
-        x = self.up2(x)                 # 60 → ~120
-        x = self.out(x)
-
-        return x
- 
+    def forward(self, z, skip1=None):
+        x = self.up1(z)
+        x = self.up2(x)
+        return self.out(x)
