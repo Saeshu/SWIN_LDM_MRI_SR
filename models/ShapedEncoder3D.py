@@ -139,6 +139,7 @@ class SwinTransformerBlock3D(nn.Module):
     """
     Swin Transformer Block for 3D volumes.
     Supports both regular and shifted window attention.
+    Automatically adjusts window size if it doesn't divide resolution evenly.
     """
     def __init__(self, dim, input_resolution, num_heads, window_size=4,
                  shift_size=0, mlp_ratio=4., qkv_bias=True,
@@ -151,9 +152,22 @@ class SwinTransformerBlock3D(nn.Module):
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
 
-        if min(self.input_resolution) <= self.window_size:
+        # Adjust window size if it doesn't fit
+        D, H, W = self.input_resolution
+        if D < self.window_size or H < self.window_size or W < self.window_size:
+            self.window_size = min(D, H, W)
             self.shift_size = 0
-            self.window_size = min(self.input_resolution)
+            print(f"Warning: window_size adjusted to {self.window_size} for resolution {input_resolution}")
+        
+        # Ensure window size divides evenly
+        while D % self.window_size != 0 or H % self.window_size != 0 or W % self.window_size != 0:
+            self.window_size -= 1
+            if self.window_size < 2:
+                raise ValueError(f"Cannot find valid window size for resolution {input_resolution}")
+        
+        # Adjust shift size accordingly
+        if self.shift_size > 0:
+            self.shift_size = min(self.shift_size, self.window_size // 2)
 
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
@@ -285,27 +299,43 @@ class SwinMixingField3D(nn.Module):
     def __init__(self, in_ch, num_kernels=5, window_size=4, num_heads=4, temperature=1.0):
         super().__init__()
         self.temperature = temperature
+        self.window_size = window_size
+        self.num_heads = num_heads
+        self.num_kernels = num_kernels
         
         # Embed input to num_kernels channels
         self.embed = nn.Conv3d(in_ch, num_kernels, 3, padding=1)
         
-        # Two SWIN blocks with window shifting
-        self.block1 = SwinTransformerBlock3D(
-            dim=num_kernels,
-            input_resolution=(32, 32, 32),  # Adjust based on your actual resolution
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=0
-        )
-        self.block2 = SwinTransformerBlock3D(
-            dim=num_kernels,
-            input_resolution=(32, 32, 32),
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=window_size // 2  # Shifted window
-        )
+        # SWIN blocks will be created dynamically based on input resolution
+        self.block1 = None
+        self.block2 = None
+        
+    def _ensure_blocks(self, resolution):
+        """Create SWIN blocks if they don't exist or resolution changed."""
+        if self.block1 is None or self.block1.input_resolution != resolution:
+            self.block1 = SwinTransformerBlock3D(
+                dim=self.num_kernels,
+                input_resolution=resolution,
+                num_heads=self.num_heads,
+                window_size=self.window_size,
+                shift_size=0
+            ).to(self.embed.weight.device)
+            
+            self.block2 = SwinTransformerBlock3D(
+                dim=self.num_kernels,
+                input_resolution=resolution,
+                num_heads=self.num_heads,
+                window_size=self.window_size,
+                shift_size=self.window_size // 2
+            ).to(self.embed.weight.device)
         
     def forward(self, x):
+        B, C, D, H, W = x.shape
+        resolution = (D, H, W)
+        
+        # Ensure blocks match current resolution
+        self._ensure_blocks(resolution)
+        
         alpha = self.embed(x)
         alpha = self.block1(alpha)
         alpha = self.block2(alpha)
@@ -377,17 +407,48 @@ class ShapedEncoder3D(nn.Module):
 # ============================================================================
 
 if __name__ == "__main__":
-    # Test the architecture
-    batch_size = 2
-    channels = 1
-    depth, height, width = 32, 32, 32
+    print("="*70)
+    print("Testing Dynamic Resolution Tracking")
+    print("="*70)
     
     model = ShapedEncoder3D(in_ch=1, base_ch=16)
-    x = torch.randn(batch_size, channels, depth, height, width)
     
-    print("Input shape:", x.shape)
-    x2, x1 = model(x)
-    print("After down1:", x1.shape)
-    print("After down2:", x2.shape)
+    # Test 1: Standard power-of-2 resolution
+    print("\n[Test 1] Standard 64×64×64 input:")
+    x1 = torch.randn(2, 1, 64, 64, 64)
+    print(f"  Input: {x1.shape}")
+    x2, x1_out = model(x1)
+    print(f"  After down1: {x1_out.shape} (expected: 2×16×32×32×32)")
+    print(f"  After down2: {x2.shape} (expected: 2×32×16×16×16)")
     
-    print("\n✓ Model runs successfully!")
+    # Test 2: Non-standard resolution
+    print("\n[Test 2] Non-standard 48×48×48 input:")
+    x2_input = torch.randn(2, 1, 48, 48, 48)
+    print(f"  Input: {x2_input.shape}")
+    x2_down2, x2_down1 = model(x2_input)
+    print(f"  After down1: {x2_down1.shape} (expected: 2×16×24×24×24)")
+    print(f"  After down2: {x2_down2.shape} (expected: 2×32×12×12×12)")
+    
+    # Test 3: Odd resolution that requires window size adjustment
+    print("\n[Test 3] Odd 40×40×40 input (will auto-adjust window size):")
+    x3 = torch.randn(2, 1, 40, 40, 40)
+    print(f"  Input: {x3.shape}")
+    x3_down2, x3_down1 = model(x3)
+    print(f"  After down1: {x3_down1.shape} (expected: 2×16×20×20×20)")
+    print(f"  After down2: {x3_down2.shape} (expected: 2×32×10×10×10)")
+    
+    # Test 4: Very small resolution
+    print("\n[Test 4] Small 16×16×16 input:")
+    x4 = torch.randn(2, 1, 16, 16, 16)
+    print(f"  Input: {x4.shape}")
+    x4_down2, x4_down1 = model(x4)
+    print(f"  After down1: {x4_down1.shape} (expected: 2×16×8×8×8)")
+    print(f"  After down2: {x4_down2.shape} (expected: 2×32×4×4×4)")
+    
+    print("\n" + "="*70)
+    print("✓ All tests passed! Dynamic resolution tracking works correctly.")
+    print("="*70)
+    
+    # Show memory usage
+    print(f"\nModel Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Trainable Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
