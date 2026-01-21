@@ -3,125 +3,195 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-class KernelBasis3D(nn.Module):
-    def __init__(self, in_ch, out_ch):
+class AnisotropicConvSuite(nn.Module):
+    """
+    Runs multiple anisotropic convolutions in parallel.
+    All kernels see the SAME input.
+    """
+
+    def __init__(self, in_ch, out_ch, depth_kernels=(3, 5, 7)):
         super().__init__()
 
-        self.k1 = nn.Conv3d(in_ch, out_ch, 1, padding=0)
+        # In-plane spatial conv (no depth mixing)
+        self.conv_3x3x1 = nn.Conv3d(
+            in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
+        )
 
-        self.k333 = nn.Conv3d(in_ch, out_ch, 3, padding=1)
-        
-        self.k133 = nn.Conv3d(in_ch, out_ch, (1, 3, 3), padding=(0, 1, 1))
-        self.k313 = nn.Conv3d(in_ch, out_ch, (3, 1, 3), padding=(1, 0, 1))
-        self.k331 = nn.Conv3d(in_ch, out_ch, (3, 3, 1), padding=(1, 1, 0))
+        # Depth-only convolutions (no spatial mixing)
+        self.depth_convs = nn.ModuleList([
+            nn.Conv3d(
+                in_ch, out_ch,
+                kernel_size=(k, 1, 1),
+                padding=(k // 2, 0, 0)
+            )
+            for k in depth_kernels
+        ])
+
+        # 1x1x1 channel mixer (acts like residual control)
+        self.conv_1x1x1 = nn.Conv3d(in_ch, out_ch, kernel_size=1)
+
+        self.num_paths = 1 + len(depth_kernels) + 1  # spatial + depth + mixer
 
     def forward(self, x):
-        return torch.stack([
-            self.k1(x),
-            self.k333(x),
-            self.k133(x),
-            self.k313(x),
-            self.k331(x),
-            
-        ], dim=1)
-        # shape: [B, 5, C, D, H, W]
+        """
+        Returns a list of feature maps, one per kernel path.
+        """
+        feats = []
 
-class SwinBlock3D(nn.Module):
+        feats.append(self.conv_3x3x1(x))      # spatial
+        for conv in self.depth_convs:          # depth paths
+            feats.append(conv(x))
+
+        feats.append(self.conv_1x1x1(x))       # channel mixer
+
+        return feats  # list of tensors, all same shape
+
+class WindowPool3D(nn.Module):
     """
-    Minimal Swin-style block for 3D volumes.
-    - No window shifting yet
-    - No multi-head complexity
-    - Stable on CPU
+    Compresses local 3D windows into single tokens.
+    This is the 'Swin-style compression' step.
     """
 
-    def __init__(self, dim):
+    def __init__(self, window_size=(1, 7, 7)):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = nn.Linear(dim, dim)   # token mixing
-        self.norm2 = nn.LayerNorm(dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, dim * 4),
-            nn.GELU(),
-            nn.Linear(dim * 4, dim)
-        )
+        self.window_size = window_size
 
     def forward(self, x):
         """
         x: [B, C, D, H, W]
+        returns: tokens [B, N_windows, C]
         """
+
         B, C, D, H, W = x.shape
+        wd, wh, ww = self.window_size
 
-        # flatten spatial dims → tokens
-        x_tokens = rearrange(x, 'b c d h w -> b (d h w) c')
+        # unfold creates sliding windows
+        x = x.unfold(2, wd, wd) \
+             .unfold(3, wh, wh) \
+             .unfold(4, ww, ww)
+        # shape: [B, C, Nd, Nh, Nw, wd, wh, ww]
 
-        # attention-like mixing
-        x_tokens = x_tokens + self.attn(self.norm1(x_tokens))
+        x = x.contiguous().view(B, C, -1, wd * wh * ww)
 
-        # MLP
-        x_tokens = x_tokens + self.mlp(self.norm2(x_tokens))
+        # pool inside each window → single token
+        tokens = x.mean(dim=-1)   # [B, C, N_windows]
+        tokens = tokens.permute(0, 2, 1)  # [B, N_windows, C]
 
-        # reshape back
-        x = rearrange(x_tokens, 'b (d h w) c -> b c d h w',
-                      d=D, h=H, w=W)
-        return x
-        
-class SwinMixingField3D(nn.Module):
-    def __init__(self, in_ch, num_kernels=5):
+        return tokens
+
+class KernelMixingAttention(nn.Module):
+    """
+    Uses self-attention over window tokens to predict
+    kernel mixing weights.
+    """
+
+    def __init__(self, embed_dim, num_kernels, num_heads=4):
         super().__init__()
-        self.embed = nn.Conv3d(in_ch, num_kernels, 3, padding=1)
-        self.block1 = SwinBlock3D(num_kernels)
-        self.block2 = SwinBlock3D(num_kernels)
 
-    def forward(self, x):
-        alpha = self.embed(x)
-        alpha = self.block1(alpha)
-        alpha = self.block2(alpha)
-        return torch.softmax(alpha, dim=1)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            batch_first=True
+        )
 
-class AttentionShapedConv3D(nn.Module):
-    def __init__(self, in_ch, out_ch):
+        self.proj = nn.Linear(embed_dim, num_kernels)
+
+    def forward(self, tokens):
+        """
+        tokens: [B, N_windows, C]
+        returns: weights [B, N_windows, K]
+        """
+
+        # Self-attention inside windows
+        attn_out, _ = self.attn(tokens, tokens, tokens)
+
+        # Map context → kernel logits
+        logits = self.proj(attn_out)
+
+        # Softmax over kernels
+        weights = F.softmax(logits, dim=-1)
+
+        return weights
+
+
+class AnisotropicSwinBlock(nn.Module):
+    """
+    Full block:
+    - parallel anisotropic convs
+    - window compression
+    - self-attention for kernel weights
+    - weighted fusion
+    """
+
+    def __init__(
+        self,
+        in_ch,
+        out_ch,
+        depth_kernels=(3, 5, 7),
+        window_size=(1, 7, 7),
+        use_attention=True
+    ):
         super().__init__()
-        self.basis = KernelBasis3D(in_ch, out_ch)
 
-    def forward(self, x, alpha):
-        # basis_out: [B, 4, C, D, H, W]
-        basis_out = self.basis(x)
+        self.conv_suite = AnisotropicConvSuite(
+            in_ch, out_ch, depth_kernels
+        )
 
-        # alpha: [B, 4, D, H, W] → broadcast
-        alpha = alpha.unsqueeze(2)
+        self.use_attention = use_attention
+        self.num_kernels = self.conv_suite.num_paths
 
-        out = (basis_out * alpha).sum(dim=1)
-        return out
-class SwinGuidedConvBlock3D(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super().__init__()
-        self.swin = SwinMixingField3D(in_ch)
-        self.conv = AttentionShapedConv3D(in_ch, out_ch)
+        if use_attention:
+            self.window_pool = WindowPool3D(window_size)
+            self.attn = KernelMixingAttention(
+                embed_dim=in_ch,
+                num_kernels=self.num_kernels
+            )
+        else:
+            # fallback: learned global weights
+            self.alpha = nn.Parameter(torch.ones(self.num_kernels))
+
         self.norm = nn.GroupNorm(8, out_ch)
         self.act = nn.SiLU()
 
     def forward(self, x):
-        alpha = self.swin(x)
-        x = self.conv(x, alpha)
-        return self.act(self.norm(x))
-class ShapedDownBlock3D(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super().__init__()
-        self.shaped = SwinGuidedConvBlock3D(in_ch, out_ch)
-        self.pool = nn.AvgPool3d(kernel_size=2, stride=2)
+        feats = self.conv_suite(x)  # list of [B, C, D, H, W]
 
-    def forward(self, x):
-        x = self.shaped(x)
-        x = self.pool(x)
-        return x
-class ShapedEncoder3D(nn.Module):
-    def __init__(self, in_ch=1, base_ch=16):
-        super().__init__()
+        if self.use_attention:
+            tokens = self.window_pool(x)
+            weights = self.attn(tokens)  # [B, N_windows, K]
 
-        self.down1 = ShapedDownBlock3D(in_ch, base_ch)
-        self.down2 = ShapedDownBlock3D(base_ch, base_ch * 2)
+            # collapse window weights to global (cheap + stable)
+            weights = weights.mean(dim=1)  # [B, K]
+        else:
+            weights = F.softmax(self.alpha, dim=0).unsqueeze(0)
 
-    def forward(self, x):
-        x1 = self.down1(x)
-        x2 = self.down2(x1)
-        return x2, x1
+        # weighted fusion
+        y = 0
+        for i, f in enumerate(feats):
+            y = y + weights[:, i].view(-1, 1, 1, 1, 1) * f
+
+        y = self.act(self.norm(y))
+        return y
+
+# Early layers (no depth attention, cheap)
+block_lvl0 = AnisotropicSwinBlock(
+    in_ch=32, out_ch=32,
+    depth_kernels=(),     # no depth mixing
+    use_attention=False
+)
+
+# Mid layers
+block_lvl2 = AnisotropicSwinBlock(
+    in_ch=64, out_ch=128,
+    depth_kernels=(3, 5),
+    window_size=(1, 7, 7),
+    use_attention=True
+)
+
+# Bottleneck
+block_bottleneck = AnisotropicSwinBlock(
+    in_ch=256, out_ch=256,
+    depth_kernels=(3, 5, 7),
+    window_size=(3, 7, 7),
+    use_attention=True
+)
