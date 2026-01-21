@@ -29,29 +29,76 @@ def match_shape(x, ref):
     # Crop if too large
     x = x[:, :, :D, :H, :W]
     return x
-class Decoder3D(nn.Module):
-    def __init__(self, out_ch=1, base_ch=16):
+
+class SpatialUpsample3D(nn.Module):
+    """
+    Safe upsampling:
+    - Only upsamples H and W
+    - Keeps depth unchanged
+    """
+
+    def __init__(self, scale_factor=2, mode="trilinear"):
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.mode = mode
+
+    def forward(self, x):
+        return F.interpolate(
+            x,
+            scale_factor=(1, self.scale_factor, self.scale_factor),
+            mode=self.mode,
+            align_corners=False if self.mode != "nearest" else None
+        )
+
+
+class DecoderConvSuite(nn.Module):
+    """
+    Anisotropic convolution suite for reconstruction.
+    Spatial kernels dominate.
+    """
+
+    def __init__(
+        self,
+        in_ch,
+        out_ch,
+        use_depth=True
+    ):
         super().__init__()
 
-        # z: [B, 32, D/4, H/4, W/4] → [B, 16, D/2, H/2, W/2]
-        self.up1 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False),
-            nn.Conv3d(base_ch * 2, base_ch, kernel_size=3, padding=1),
-            nn.InstanceNorm3d(base_ch),
-            nn.SiLU()
+        # Spatial refinement (main workhorses)
+        self.conv_3x3x1 = nn.Conv3d(
+            in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
+        )
+        self.conv_1x3x1 = nn.Conv3d(
+            in_ch, out_ch, kernel_size=(1, 3, 1), padding=(0, 1, 0)
+        )
+        self.conv_3x1x1 = nn.Conv3d(
+            in_ch, out_ch, kernel_size=(1, 1, 3), padding=(0, 0, 1)
         )
 
-        # [B, 16, D/2, H/2, W/2] → [B, 16, D, H, W]
-        self.up2 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False),
-            nn.Conv3d(base_ch, base_ch, kernel_size=3, padding=1),
-            nn.InstanceNorm3d(base_ch),
-            nn.SiLU()
-        )
+        self.use_depth = use_depth
 
-        self.out = nn.Conv3d(base_ch, out_ch, kernel_size=1)
+        if use_depth:
+            # Short-range depth consistency only
+            self.conv_1x1x3 = nn.Conv3d(
+                in_ch, out_ch, kernel_size=(3, 1, 1), padding=(1, 0, 0)
+            )
 
-    def forward(self, z, skip1=None):
-        x = self.up1(z)
-        x = self.up2(x)
-        return self.out(x)
+        # Channel mixer
+        self.conv_1x1x1 = nn.Conv3d(in_ch, out_ch, kernel_size=1)
+
+        self.num_paths = 4 + (1 if use_depth else 0)
+
+    def forward(self, x):
+        feats = [
+            self.conv_3x3x1(x),
+            self.conv_1x3x1(x),
+            self.conv_3x1x1(x),
+        ]
+
+        if self.use_depth:
+            feats.append(self.conv_1x1x3(x))
+
+        feats.append(self.conv_1x1x1(x))
+
+        return feats
