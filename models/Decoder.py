@@ -3,53 +3,53 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
-def match_shape(x, ref):
-    """
-    Match x spatial shape to ref by symmetric padding or cropping.
-    """
-    _, _, D, H, W = ref.shape
-    d, h, w = x.shape[2:]
 
-    pd = D - d
-    ph = H - h
-    pw = W - w
-
-    # Pad if too small
-    if pd > 0 or ph > 0 or pw > 0:
-        x = F.pad(
-            x,
-            (
-                pw // 2, pw - pw // 2,
-                ph // 2, ph - ph // 2,
-                pd // 2, pd - pd // 2,
-            )
-        )
-
-    # Crop if too large
-    x = x[:, :, :D, :H, :W]
-    return x
-
+# --------------------------------------------------
+# Spatial upsampling (H, W only)
+# --------------------------------------------------
 class SpatialUpsample3D(nn.Module):
     """
-    Safe upsampling:
-    - Only upsamples H and W
-    - Keeps depth unchanged
+    Memory-safe spatial upsampling:
+    - Upsamples H/W only
+    - Treats depth as batch
     """
 
-    def __init__(self, scale_factor=2, mode="trilinear"):
+    def __init__(self, scale_factor=2):
         super().__init__()
         self.scale_factor = scale_factor
-        self.mode = mode
 
     def forward(self, x):
-        return F.interpolate(
+        """
+        x: [B, C, D, H, W]
+        """
+        B, C, D, H, W = x.shape
+
+        # Treat depth as batch
+        x = x.permute(0, 2, 1, 3, 4).contiguous()  # [B, D, C, H, W]
+        x = x.view(B * D, C, H, W)                # [B·D, C, H, W]
+
+        # 2D upsample (cheap & safe)
+        x = F.interpolate(
             x,
-            scale_factor=(1, self.scale_factor, self.scale_factor),
-            mode=self.mode,
-            align_corners=False if self.mode != "nearest" else None
+            scale_factor=self.scale_factor,
+            mode="nearest"
         )
 
+        _, _, H2, W2 = x.shape
+
+        # Restore 3D structure
+        x = x.view(B, D, C, H2, W2)
+        x = x.permute(0, 2, 1, 3, 4).contiguous()  # [B, C, D, H2, W2]
+
+        return x
+
+
+
+# --------------------------------------------------
+# Decoder convolution suite (reconstruction-focused)
+# --------------------------------------------------
 
 class DecoderConvSuite(nn.Module):
     """
@@ -57,15 +57,10 @@ class DecoderConvSuite(nn.Module):
     Spatial kernels dominate.
     """
 
-    def __init__(
-        self,
-        in_ch,
-        out_ch,
-        use_depth=True
-    ):
+    def __init__(self, in_ch, out_ch, use_depth=True):
         super().__init__()
 
-        # Spatial refinement (main workhorses)
+        # Spatial refinement
         self.conv_3x3x1 = nn.Conv3d(
             in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
         )
@@ -79,7 +74,7 @@ class DecoderConvSuite(nn.Module):
         self.use_depth = use_depth
 
         if use_depth:
-            # Short-range depth consistency only
+            # Short-range depth regularization only
             self.conv_1x1x3 = nn.Conv3d(
                 in_ch, out_ch, kernel_size=(3, 1, 1), padding=(1, 0, 0)
             )
@@ -103,28 +98,98 @@ class DecoderConvSuite(nn.Module):
 
         return feats
 
-class DecoderKernelMixer(nn.Module):
-    def __init__(self, num_kernels):
+
+# --------------------------------------------------
+# Decoder block (upsample + conv suite + kernel mixing)
+# --------------------------------------------------
+
+class DecoderBlock(nn.Module):
+    """
+    One decoder stage:
+    - spatial upsampling (H, W only)
+    - anisotropic reconstruction convs
+    - kernel mixing (optionally biased by encoder intent)
+    """
+
+    def __init__(self, in_ch, out_ch, use_depth=True, enc_kernel_dim=None, upsample=True):
         super().__init__()
-        self.logits = nn.Parameter(torch.zeros(num_kernels))
 
-    def forward(self, feats, encoder_bias=None, strength=1.0):
-        """
-        feats: list of [B, C, D, H, W]
-        encoder_bias: [B, K_enc] or None
-        """
+        self.upsample_enabled = upsample
+        self.upsample = SpatialUpsample3D(scale_factor=2)
+        
+        self.conv_suite = DecoderConvSuite(
+            in_ch=in_ch,
+            out_ch=out_ch,
+            use_depth=use_depth
+        )
 
-        logits = self.logits
+        self.num_dec_kernels = self.conv_suite.num_paths
 
-        if encoder_bias is not None:
-            # global bias from encoder intent
-            logits = logits + strength * encoder_bias.mean(dim=0)[:logits.numel()]
+        # Decoder-side kernel logits (learned)
+        self.logits = nn.Parameter(torch.zeros(self.num_dec_kernels))
 
-        weights = F.softmax(logits, dim=0)
+        # 🔑 Learned projection: encoder intent → decoder kernel space
+        if enc_kernel_dim is not None:
+            self.enc_to_dec = nn.Linear(enc_kernel_dim, self.num_dec_kernels)
+        else:
+            self.enc_to_dec = None
 
-        y = 0
-        for w, f in zip(weights, feats):
-            y = y + w * f
+        self.norm = nn.GroupNorm(8, out_ch)
+        self.act = nn.SiLU()
 
-        return y
+    def forward(self, x, encoder_kernel_skip=None, bias_strength=1.0):
 
+        if self.upsample_enabled:
+            x = self.upsample(x)
+    
+        def heavy(x):
+            feats = self.conv_suite(x)
+    
+            logits = self.logits
+            if encoder_kernel_skip is not None and self.enc_to_dec is not None:
+                enc_intent = encoder_kernel_skip.detach()   # 🔑 CUT GRAPH HERE
+                if enc_intent.dim() == 2:
+                    enc_intent = enc_intent.mean(dim=0)
+            
+                bias = self.enc_to_dec(enc_intent)
+                logits = logits + bias_strength * bias
+    
+            weights = F.softmax(logits, dim=0)
+            y = sum(w * f for w, f in zip(weights, feats))
+            return y
+    
+        y = checkpoint(heavy, x)
+        return self.act(self.norm(y))
+        
+
+# --------------------------------------------------
+# Output refinement head (image space)
+# --------------------------------------------------
+
+class OutputRefinementHead(nn.Module):
+    """
+    Final reconstruction head.
+    Converts decoder features into image space.
+    """
+
+    def __init__(self, in_ch, out_ch=1):
+        super().__init__()
+
+        # Spatial sharpening
+        self.spatial = nn.Conv3d(
+            in_ch,
+            out_ch,
+            kernel_size=(1, 3, 3),
+            padding=(0, 1, 1)
+        )
+
+        # Gentle depth consistency
+        self.depth = nn.Conv3d(
+            in_ch,
+            out_ch,
+            kernel_size=(3, 1, 1),
+            padding=(1, 0, 0)
+        )
+
+    def forward(self, x):
+        return self.spatial(x) + 0.3 * self.depth(x)
