@@ -153,24 +153,24 @@ class AnisotropicSwinBlock(nn.Module):
         self.norm = nn.GroupNorm(8, out_ch)
         self.act = nn.SiLU()
 
-    def forward(self, x):
-        feats = self.conv_suite(x)  # list of [B, C, D, H, W]
-
+    def forward(self, x, return_weights=False):
+        feats = self.conv_suite(x)
+    
         if self.use_attention:
             tokens = self.window_pool(x)
-            weights = self.attn(tokens)  # [B, N_windows, K]
-
-            # collapse window weights to global (cheap + stable)
-            weights = weights.mean(dim=1)  # [B, K]
+            weights = self.attn(tokens).mean(dim=1)  # [B, K]
         else:
             weights = F.softmax(self.alpha, dim=0).unsqueeze(0)
-
-        # weighted fusion
+    
         y = 0
         for i, f in enumerate(feats):
             y = y + weights[:, i].view(-1, 1, 1, 1, 1) * f
-
+    
         y = self.act(self.norm(y))
+    
+        if return_weights:
+            return y, weights
+    
         return y
 
 # Early layers (no depth attention, cheap)
@@ -195,3 +195,4 @@ block_bottleneck = AnisotropicSwinBlock(
     window_size=(3, 7, 7),
     use_attention=True
 )
+
