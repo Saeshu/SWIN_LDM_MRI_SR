@@ -173,26 +173,17 @@ class AnisotropicSwinBlock(nn.Module):
     
         return y
 
-# Early layers (no depth attention, cheap)
-block_lvl0 = AnisotropicSwinBlock(
-    in_ch=32, out_ch=32,
-    depth_kernels=(),     # no depth mixing
-    use_attention=False
-)
+class SpatialDownsample3D(nn.Module):
+    """
+    Downsample H/W only, preserve depth.
+    """
+    def __init__(self):
+        super().__init__()
+        self.pool = nn.AvgPool3d(
+            kernel_size=(1, 2, 2),
+            stride=(1, 2, 2)
+        )
 
-# Mid layers
-block_lvl2 = AnisotropicSwinBlock(
-    in_ch=64, out_ch=128,
-    depth_kernels=(3, 5),
-    window_size=(1, 7, 7),
-    use_attention=True
-)
-
-# Bottleneck
-block_bottleneck = AnisotropicSwinBlock(
-    in_ch=256, out_ch=256,
-    depth_kernels=(3, 5, 7),
-    window_size=(3, 7, 7),
-    use_attention=True
-)
+    def forward(self, x):
+        return self.pool(x)
 
