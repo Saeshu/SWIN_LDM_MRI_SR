@@ -91,8 +91,9 @@ class MRIDataset(Dataset):
         # SR mode
         lr = F.avg_pool3d(
             hr.unsqueeze(0),
-            kernel_size=self.downscale_factor,
-            stride=self.downscale_factor
+            kernel_size=(1, self.downscale_factor, self.downscale_factor),
+            stride=(1, self.downscale_factor, self.downscale_factor)
         ).squeeze(0)
-
+        
         return hr, lr
+
