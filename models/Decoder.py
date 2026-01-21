@@ -102,3 +102,29 @@ class DecoderConvSuite(nn.Module):
         feats.append(self.conv_1x1x1(x))
 
         return feats
+
+class DecoderKernelMixer(nn.Module):
+    def __init__(self, num_kernels):
+        super().__init__()
+        self.logits = nn.Parameter(torch.zeros(num_kernels))
+
+    def forward(self, feats, encoder_bias=None, strength=1.0):
+        """
+        feats: list of [B, C, D, H, W]
+        encoder_bias: [B, K_enc] or None
+        """
+
+        logits = self.logits
+
+        if encoder_bias is not None:
+            # global bias from encoder intent
+            logits = logits + strength * encoder_bias.mean(dim=0)[:logits.numel()]
+
+        weights = F.softmax(logits, dim=0)
+
+        y = 0
+        for w, f in zip(weights, feats):
+            y = y + w * f
+
+        return y
+
