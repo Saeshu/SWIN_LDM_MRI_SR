@@ -1,5 +1,5 @@
 import torch
-
+import math 
 class LinearNoiseSchedule:
     def __init__(self, T=1000, beta_start=1e-4, beta_end=0.02, device="cpu"):
         self.T = T
