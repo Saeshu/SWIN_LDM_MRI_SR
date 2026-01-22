@@ -138,7 +138,7 @@ class DecoderBlock(nn.Module):
         self.act = nn.SiLU()
 
     def forward(self, x, encoder_kernel_skip=None, bias_strength=1.0):
-
+        
         if self.upsample_enabled:
             x = self.upsample(x)
     
