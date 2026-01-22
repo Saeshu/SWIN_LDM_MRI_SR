@@ -42,6 +42,9 @@ class LongSliceSuite(nn.Module):
             nn.SiLU(),
             nn.Conv3d(c, c, kernel_size=(1,1,9), padding=(0,0,4)),
         )
+    def forward(self, x):
+        return self.net(x)
+
 
 
 
@@ -89,9 +92,7 @@ class TimeGatedConvSuite(nn.Module):
         return out
 
 
-    def forward(self, x):
-        return self.net(x)
-
+    
 
 class BottleneckBlock(nn.Module):
     def __init__(self, channels):
