@@ -56,13 +56,13 @@ class AutoEncoder(nn.Module):
           return x
 
       # --- decoder only ---
-      def decode(self, z, w_E2=None):
+    def decode(self, z, w_E2=None):
           # NOTE: for now, no skip — diffusion doesn't need it
           z = self.dec2(z, encoder_kernel_skip=w_E2, bias_strength=1.0)
           z = self.dec1(z)
           z = self.dec0(z)
           return self.out(z)
 
-      def forward(self, x):
+    def forward(self, x):
           z = self.encode(x)
           return self.decode(z)
