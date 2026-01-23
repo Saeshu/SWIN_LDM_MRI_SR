@@ -46,18 +46,23 @@ class AutoEncoder(nn.Module):
 
         self.out = OutputRefinementHead(32, out_ch=1)
 
-    def forward(self, x):
-        # encode
+   def encode(self, x):
         x = self.enc0(x)
         x = self.down0(x)
         x = self.enc1(x)
         x = self.down1(x)
-        x, w_E2 = self.enc2(x, return_weights=True)
+        x, _ = self.enc2(x, return_weights=True)
         x = self.enc3(x)
+        return x
 
-        # decode (intent skip)
-        x = self.dec2(x, encoder_kernel_skip=w_E2, bias_strength=1.0)
-        x = self.dec1(x)
-        x = self.dec0(x)
+    # --- decoder only ---
+    def decode(self, z, w_E2=None):
+        # NOTE: for now, no skip — diffusion doesn't need it
+        z = self.dec2(z, encoder_kernel_skip=w_E2, bias_strength=1.0)
+        z = self.dec1(z)
+        z = self.dec0(z)
+        return self.out(z)
 
-        return self.out(x)
+    def forward(self, x):
+        z = self.encode(x)
+        return self.decode(z)
