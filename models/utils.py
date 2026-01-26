@@ -63,20 +63,21 @@ def match_shape(x, ref):
     x = x[:, :, :D, :H, :W]
     return x
 
-def random_patch_3d(vol, patch_size=64):
+def random_hw_patch_3d(vol, patch_hw=(192, 192)):
     """
     vol: [1, D, H, W]  (single-channel MRI)
-    returns: [1, patch, patch, patch]
+    patch_hw: (ph, pw)
+
+    returns: [1, D, ph, pw]
     """
     _, D, H, W = vol.shape
-    ps = patch_size
+    ph, pw = patch_hw
 
-    assert D >= ps and H >= ps and W >= ps, "Patch size too big"
+    assert H >= ph and W >= pw, "Patch size too big for H/W"
 
-    d0 = random.randint(0, D - ps)
-    h0 = random.randint(0, H - ps)
-    w0 = random.randint(0, W - ps)
+    h0 = random.randint(0, H - ph)
+    w0 = random.randint(0, W - pw)
 
-    patch = vol[:, d0:d0+ps, h0:h0+ps, w0:w0+ps]
+    patch = vol[:, :, h0:h0+ph, w0:w0+pw]
     return patch
 
