@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 
@@ -158,7 +157,7 @@ class DecoderBlock(nn.Module):
             y = sum(w * f for w, f in zip(weights, feats))
             return y
     
-        y = checkpoint(heavy, x)
+        y = checkpoint(heavy, x, use_reentrant=False)
         return self.act(self.norm(y))
         
 
