@@ -51,9 +51,9 @@ class AutoEncoder(nn.Module):
           x = self.down0(x)
           x = self.enc1(x)
           x = self.down1(x)
-          x, _ = self.enc2(x, return_weights=True)
+          x, w_E2 = self.enc2(x, return_weights=True)
           x = self.enc3(x)
-          return x
+          return x,w_E2
 
       # --- decoder only ---
     def decode(self, z, w_E2=None):
