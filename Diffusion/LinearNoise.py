@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import math 
 class LinearNoiseSchedule:
     def __init__(self, T=1000, beta_start=1e-4, beta_end=0.02, device="cpu"):
@@ -34,34 +35,41 @@ class LinearNoiseSchedule:
         return zt, noise
 
 
-class NoiseScheduler:
+class NoiseScheduler(nn.Module):
     def __init__(self, num_timesteps=50, beta_max=0.008, schedule="cosine"):
-        self.T = num_timesteps
+        super().__init__()
+        self.num_timesteps = num_timesteps
 
         if schedule == "linear":
-            self.betas = torch.linspace(1e-4, beta_max, self.T)
+            betas = torch.linspace(1e-4, beta_max, num_timesteps)
         elif schedule == "cosine":
-            self.betas = self._cosine_schedule(beta_max)
+            betas = self._cosine_schedule(beta_max)
         else:
             raise ValueError("Unknown schedule")
 
-        self.alphas = 1.0 - self.betas
-        self.alpha_bars = torch.cumprod(self.alphas, dim=0)
+        alphas = 1.0 - betas
+        alpha_bars = torch.cumprod(alphas, dim=0)
+
+        # 🔑 register buffers so `.to(device)` works
+        self.register_buffer("betas", betas)
+        self.register_buffer("alphas", alphas)
+        self.register_buffer("alpha_bars", alpha_bars)
 
     def _cosine_schedule(self, beta_max):
-        t = torch.linspace(0, self.T, self.T + 1)
-        f = torch.cos((t / self.T + 0.008) / 1.008 * math.pi / 2) ** 2
+        t = torch.linspace(0, self.num_timesteps, self.num_timesteps + 1)
+        f = torch.cos((t / self.num_timesteps + 0.008) / 1.008 * math.pi / 2) ** 2
         alpha_bar = f / f[0]
         betas = 1 - alpha_bar[1:] / alpha_bar[:-1]
         return betas.clamp(max=beta_max)
 
     def add_noise(self, x0, t, noise):
-        """
-        x0: clean residual latent
-        t: (B,)
-        noise: N(0,1)
-        """
-        a_bar = self.alpha_bars[t].view(-1, 1, 1, 1, 1).to(x0.device)
+        # 🔥 HARD GUARDS
+        assert x0.dim() == 5
+        assert noise.shape == x0.shape
+    
+        t = t.long().view(-1)   # FORCE (B,)
+        assert t.dim() == 1
+        assert t.shape[0] == x0.shape[0]
+    
+        a_bar = self.alpha_bars[t].view(-1, 1, 1, 1, 1)
         return torch.sqrt(a_bar) * x0 + torch.sqrt(1 - a_bar) * noise
-
-
