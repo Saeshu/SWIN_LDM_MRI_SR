@@ -99,7 +99,18 @@ class ConditionalEpsUNet3D(nn.Module):
         cond: (B, Cc, H, W, D) upsampled LR latent
         t:    (B,) diffusion timestep
         """
+        
+        '''print(
+            "UNet forward:",
+            "z_ch =", z.shape[1],
+            "cond is None?", cond is None,
+            "cond_ch =", 0 if cond is None else cond.shape[1],
+        )
+        print("UNet forward id:", id(self))'''
 
+    
+        if self.cond_ch == 0:
+            assert cond is None, "UNet is unconditional but cond was passed"
         # ---- safety check (dev only) ----
         assert t.min() >= 0 and t.max() < self.num_timesteps
 
@@ -107,7 +118,11 @@ class ConditionalEpsUNet3D(nn.Module):
         t_emb = timestep_embedding(t, self.tdim)
 
         # ---- input fusion ----
-        x = torch.cat([z, cond], dim=1)
+        if cond is not None:
+            x = torch.cat([z, cond], dim=1)
+        else:
+            x = z
+        
         x = self.in_conv(x)
 
         # ---- encoder ----
