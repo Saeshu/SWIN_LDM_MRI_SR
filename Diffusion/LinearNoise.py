@@ -36,21 +36,27 @@ class LinearNoiseSchedule:
 
 
 class NoiseScheduler(nn.Module):
-    def __init__(self, num_timesteps=50, beta_max=0.008, schedule="cosine"):
-        super().__init__()
+    def __init__(self, num_timesteps=50, schedule="linear"):
         self.num_timesteps = num_timesteps
-
+    
         if schedule == "linear":
-            betas = torch.linspace(1e-4, beta_max, num_timesteps)
+            # Strong low-frequency structure formation
+            betas = torch.linspace(
+                1e-4,      # beta_start
+                2e-2,      # beta_end (IMPORTANT: larger than before)
+                num_timesteps
+            )
+    
         elif schedule == "cosine":
-            betas = self._cosine_schedule(beta_max)
+            betas = self._cosine_schedule()
+    
         else:
-            raise ValueError("Unknown schedule")
-
+            raise ValueError(f"Unknown schedule: {schedule}")
+    
         alphas = 1.0 - betas
         alpha_bars = torch.cumprod(alphas, dim=0)
-
-        # 🔑 register buffers so `.to(device)` works
+    
+        # Register for safety if this is a module
         self.register_buffer("betas", betas)
         self.register_buffer("alphas", alphas)
         self.register_buffer("alpha_bars", alpha_bars)
@@ -73,3 +79,4 @@ class NoiseScheduler(nn.Module):
     
         a_bar = self.alpha_bars[t].view(-1, 1, 1, 1, 1)
         return torch.sqrt(a_bar) * x0 + torch.sqrt(1 - a_bar) * noise
+
