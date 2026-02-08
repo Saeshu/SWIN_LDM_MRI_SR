@@ -37,6 +37,7 @@ class LinearNoiseSchedule:
 
 class NoiseScheduler(nn.Module):
     def __init__(self, num_timesteps=50, schedule="linear"):
+        super().__init__()
         self.num_timesteps = num_timesteps
     
         if schedule == "linear":
@@ -92,6 +93,7 @@ class NoiseScheduler(nn.Module):
         # DDPM forward process
         x_t = torch.sqrt(a_bar) * x0 + torch.sqrt(1.0 - a_bar) * noise
         return x_t
+
 
 
 
