@@ -84,9 +84,11 @@ Global context (via attention) helps but does not fully resolve degradation
 Indicates a need for better representation learning, not just architecture scaling
 🔗 Connection to Research Direction
 -->
-This project serves as a testbed for studying:
 
-- How failure modes relate to learned representations
-- Whether structural inconsistencies can be used as signals
-- How latent spaces can be shaped for better generative behavior
+```
+git clone https://github.com/Saeshu/SWIN_LDM_MRI_SR
+cd SWIN_LDM_MRI_SR
+
+pip install -r requirements.txt
+```
 
