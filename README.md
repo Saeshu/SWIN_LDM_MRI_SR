@@ -1,98 +1,91 @@
-# SWIN_LDM_MRI_SR
+🧠 3D MRI Super-Resolution using Swin-Enhanced Latent Diffusion
+📌 Overview
 
-# 🧠 MRI Super-Resolution using Latent Diffusion Models
+This project explores 3D MRI super-resolution using latent diffusion models (LDMs), with a focus on preserving anatomical structure during reconstruction.
 
-This project explores the use of latent diffusion models for reconstructing high-resolution 3D MRI volumes, with a focus on maintaining structural consistency across slices.
+While diffusion models achieve strong generative performance, they often produce structurally inconsistent or blurry outputs in medical imaging. This work investigates whether improving feature representations—via adaptive convolutions and Swin attention—can reduce these failure modes.
 
----
+❗ Problem Statement
 
-## 🚀 Overview
+MRI super-resolution is challenging due to:
 
-Super-resolving medical imaging data is challenging due to:
-- High inter-slice variability
-- Structural dependencies across 3D volumes
-- Limited paired high-resolution data
+Loss of fine anatomical detail during downsampling
+Sensitivity to noise and reconstruction artifacts
+Difficulty in maintaining global structural consistency across slices
 
-This work investigates how diffusion-based generative models can address these challenges while preserving anatomical coherence.
+Standard convolutional models are limited in capturing long-range dependencies, leading to:
 
----
+Blurry reconstructions
+Structural distortions
+Poor anatomical alignment
+🧠 Core Idea
 
-## 🧪 Key Ideas
+This project explores whether enhancing latent representations can improve reconstruction quality.
 
-- Use of **latent diffusion models** for efficient 3D MRI reconstruction
-- Analysis of **heterogeneity across slices** and its impact on reconstruction quality
-- Exploration of **structured attention mechanisms (Swin-inspired)** to better capture spatial dependencies
-- Focus on **structural consistency** rather than only pixel-level fidelity
+Specifically:
 
----
+Use a 3D autoencoder to learn a compact latent space
+Train a latent diffusion model for reconstruction
+Incorporate Swin-based attention to capture long-range dependencies
+Use adaptive convolutions to improve feature flexibility
 
-## 🧠 Motivation
+Central Question:
+Can better latent representations reduce structural degradation in generative MRI reconstruction?
 
-While diffusion models perform well at capturing local detail, they often struggle with:
-- Global structural continuity
-- Consistent representation across slices
+⚙️ Method
+Architecture Components
+3D Autoencoder (CNN-based)
+Encodes MRI volumes into a latent representation
+Latent Diffusion Model (DDPM / DDIM)
+Learns to denoise latent representations across timesteps
+Swin Attention Module
+Captures long-range spatial dependencies across 3D volumes
+Adaptive Convolutions
+Allows dynamic feature extraction based on input structure
+🤔 Why Swin Attention?
 
-This project investigates how **architectural inductive biases**, such as structured attention, influence:
-- What gets encoded in the latent space  
-- How consistent the learned representations are  
+Convolutional layers are inherently local and struggle with global structure.
 
----
+Swin attention:
 
-## 🏗️ Methodology
+Enables hierarchical self-attention
+Captures long-range anatomical relationships
+Improves cross-slice consistency in 3D data
 
-1. **Data Processing**
-   - 3D MRI volumes (NIfTI format)
-   - Slice-wise and volumetric preprocessing
+This is critical in MRI, where structure extends across the entire volume.
 
-2. **Model**
-   - Latent diffusion framework
-   - Encoder–decoder architecture
-   - Structured attention (Swin-inspired modifications)
+🧪 Experiments
+Training LDMs on 3D MRI volumes
+Evaluating reconstruction quality across diffusion timesteps
+Comparing structural fidelity with/without attention
+Observing latent space behavior during denoising
+📊 Results
 
-3. **Training**
-   - Reconstruction objective
-   - Focus on stability and consistency
 
-4. **Evaluation**
-   - Visual inspection of structural continuity
-   - Slice-wise and volumetric consistency analysis
 
----
+Include:
 
-## 📊 Results & Observations
+Low-resolution input
+Ground truth high-resolution
+Model output
+Failure cases
+Key Observations
+Structural details degrade at higher diffusion timesteps
+Outputs remain blurry despite low reconstruction loss
+Suggests limitations in latent representation quality, not just decoding
+🔬 Observations & Insights
+Failure modes are often structural, not just pixel-level
+Latent spaces may not explicitly encode anatomical consistency
+Global context (via attention) helps but does not fully resolve degradation
+Indicates a need for better representation learning, not just architecture scaling
+🔗 Connection to Research Direction
 
-- Diffusion models capture fine-grained textures effectively  
-- Structural inconsistencies emerge across slices  
-- Introducing structured attention improves:
-  - Spatial coherence  
-  - Cross-slice consistency  
+This project serves as a testbed for studying:
 
----
-
-## 🔍 Insights
-
-This work suggests that:
-- Architectural choices significantly influence **latent representations**
-- Improving spatial inductive bias can lead to more **consistent and generalizable outputs**
-- Generative performance is closely tied to how well **structure is encoded in the latent space**
-
----
-
-## 🛠️ Tech Stack
-
-- Python
-- PyTorch
-- MONAI
-- Nibabel (for medical imaging)
-- NumPy / SciPy
-
----
-
-## 📌 Future Directions
-
-- Explicit modeling of structural constraints  
-- Exploring energy-based formulations for consistency  
-- Extending to multimodal medical imaging  
-- Improving volumetric coherence during generation  
-
----
+How failure modes relate to learned representations
+Whether structural inconsistencies can be used as signals
+How latent spaces can be shaped for better generative behavior
+🚀 Future Work
+Learning feature representations where model failures become usable signals
+Exploring learned non-Euclidean feature spaces for more expressive representations
+Incorporating structure-aware or energy-based constraints
