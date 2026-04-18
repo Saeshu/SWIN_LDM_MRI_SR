@@ -1,0 +1,142 @@
+bundle_root: .
+
+device: cuda
+
+seed: 42
+
+# ========================
+# DATA
+# ========================
+data:
+  train_dir: ./data/train
+  val_dir: ./data/val
+  image_key: image
+  cond_keys: [age, gender, vent_vol, brain_vol]
+
+  spatial_size: [121, 145, 121]
+  batch_size: 2
+  num_workers: 4
+
+  cache_rate: 0.5
+
+# ========================
+# AUTOENCODER
+# ========================
+autoencoder:
+  _target_: monai.networks.nets.AutoencoderKL
+
+  spatial_dims: 3
+  in_channels: 1
+  out_channels: 1
+
+  num_channels: [64, 128, 256]
+  latent_channels: 4
+  num_res_blocks: 2
+  attention_levels: [false, false, true]
+
+  norm_num_groups: 32
+  norm_eps: 1e-6
+
+# ========================
+# DIFFUSION MODEL (UNET)
+# ========================
+unet:
+  _target_: monai.networks.nets.DiffusionModelUNet
+
+  spatial_dims: 3
+  in_channels: 4
+  out_channels: 4
+
+  num_res_blocks: 2
+  num_channels: [128, 256, 512]
+  attention_levels: [false, true, true]
+
+  num_head_channels: 64
+  norm_num_groups: 32
+
+  conditioning_embedding_in_channels: 4
+  with_conditioning: true
+
+# ========================
+# NOISE SCHEDULER
+# ========================
+noise_scheduler:
+  _target_: monai.generative.schedulers.DDPMScheduler
+
+  num_train_timesteps: 1000
+  beta_start: 0.00085
+  beta_end: 0.012
+  schedule: linear
+
+  prediction_type: v_prediction
+
+# ========================
+# SAMPLER (DDIM)
+# ========================
+sampler:
+  _target_: monai.generative.schedulers.DDIMScheduler
+
+  num_train_timesteps: 1000
+  beta_start: 0.00085
+  beta_end: 0.012
+  schedule: linear
+
+# ========================
+# TRAINING
+# ========================
+training:
+  num_epochs: 300
+  lr: 1e-4
+  weight_decay: 1e-5
+
+  grad_clip: 1.0
+
+  ema:
+    enabled: true
+    decay: 0.9999
+    start_step: 1000
+
+  mixed_precision: true
+
+# ========================
+# TIMESTEP SAMPLING (YOUR SPECIAL SAUCE)
+# ========================
+timestep_sampling:
+  strategy: restricted_range
+
+  min_t: 0.25     # t/4
+  max_t: 0.8      # 4t/5
+
+  low_noise_injection:
+    enabled: true
+    ratio: 0.1    # small % low t
+    min_t: 0.01
+    max_t: 0.1
+
+# ========================
+# LOSS
+# ========================
+loss:
+  type: mse
+  prediction_target: v
+
+# ========================
+# LOGGING
+# ========================
+logging:
+  log_interval: 10
+  val_interval: 1
+
+  save_ckpt: true
+  save_interval: 10
+
+  output_dir: ./outputs
+
+# ========================
+# SAMPLING CONFIG
+# ========================
+inference:
+  num_inference_steps: 50
+  guidance_scale: 1.0
+
+  latent_shape: [4, 32, 36, 32]  # adjust based on AE compression
