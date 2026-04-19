@@ -1,4 +1,4 @@
-##🧠 3D MRI Super-Resolution using Swin-Enhanced Latent Diffusion
+## 🧠 3D MRI Super-Resolution using Swin-Enhanced Latent Diffusion
 
 📌 Overview
 
@@ -20,7 +20,7 @@ Standard convolutional models are limited in capturing long-range dependencies, 
 - Structural distortions
 - Poor anatomical alignment
 
-##🧠 Core Idea
+## 🧠 Core Idea
 
 This project explores whether enhancing latent representations can improve reconstruction quality.
 
