@@ -31,7 +31,7 @@ Specifically:
 - Incorporate Swin-based attention to capture long-range dependencies
 -  Use adaptive convolutions to improve feature flexibility
 
-##Central Question:
+## Central Question:
 Can better latent representations reduce structural degradation in generative MRI reconstruction?
 
 ⚙️ Method
