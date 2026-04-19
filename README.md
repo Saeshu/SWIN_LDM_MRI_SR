@@ -97,10 +97,10 @@ SWIN_LDM_MRI_SR/
 │   └── train.yaml
 │
 ├── models/
-│   ├── autoencoder.py
-│   ├── diffusion.py
-│   ├── swin_module.py
-│   └── ldm.py
+│   ├── Decoder.py
+│   ├── ae.py
+│   ├── eps_unet3D.py
+│   └── utils.py
 │
 ├── data/
 │   └── dataset.py
@@ -110,10 +110,6 @@ SWIN_LDM_MRI_SR/
 │
 ├── inference/
 │   └── inference.py
-│
-├── utils/
-│   ├── loss.py
-│   └── visualization.py
 │
 ├── train.py
 ├── inference.py
