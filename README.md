@@ -91,4 +91,32 @@ cd SWIN_LDM_MRI_SR
 
 pip install -r requirements.txt
 ```
-
+```
+SWIN_LDM_MRI_SR/
+├── configs/
+│   └── train.yaml
+│
+├── models/
+│   ├── autoencoder.py
+│   ├── diffusion.py
+│   ├── swin_module.py
+│   └── ldm.py
+│
+├── data/
+│   └── dataset.py
+│
+├── training/
+│   └── train.py
+│
+├── inference/
+│   └── inference.py
+│
+├── utils/
+│   ├── loss.py
+│   └── visualization.py
+│
+├── train.py
+├── inference.py
+├── requirements.txt
+└── README.md
+```
