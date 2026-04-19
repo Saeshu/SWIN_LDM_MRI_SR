@@ -3,3 +3,4 @@ numpy
 nibabel
 pyyaml
 monai
+einops
