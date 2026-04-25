@@ -131,11 +131,11 @@ class ConditionalEpsUNet3D(nn.Module):
 
         # ---- bottleneck ----
         h = self.mid_block(x, t_emb)
-
+        
         if self.temporal_suite is not None:
             # slice-aware, timestep-gated correction
             h = h + self.temporal_suite(h, t)
-
+        
         # ---- decoder ----
         h = self.up(h)
         h = self.dec_block(h, t_emb)
