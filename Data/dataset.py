@@ -36,7 +36,7 @@ class MRIDataset(Dataset):
         root_dir,
         crop_size=(128, 256, 256),
         normalize=True,
-        downscale_factor=None,  # None → AE mode
+        downscale_factor=2,  # None → AE mode # 2-> SR mode
     ):
         self.root_dir = root_dir
         self.crop_size = crop_size
