@@ -94,6 +94,53 @@ class NoiseScheduler(nn.Module):
         x_t = torch.sqrt(a_bar) * x0 + torch.sqrt(1.0 - a_bar) * noise
         return x_t
 
+    def step(self, x_t, t, v_pred):
+        """
+        Reverse diffusion step using v-prediction
+        x_t: (B,C,D,H,W)
+        t:   (B,)
+        v_pred: model output
+        """
+    
+        t = t.long().view(-1)
+    
+        betas = self.betas.to(x_t.device)
+        alphas = self.alphas.to(x_t.device)
+        alpha_bars = self.alpha_bars.to(x_t.device)
+    
+        a_bar = alpha_bars[t].view(-1,1,1,1,1)
+        a_bar_prev = alpha_bars[torch.clamp(t-1, min=0)].view(-1,1,1,1,1)
+    
+        # ---- recover x0 from v ----
+        x0 = (
+            torch.sqrt(a_bar) * x_t
+            - torch.sqrt(1 - a_bar) * v_pred
+        )
+    
+        # ---- compute eps from v ----
+        eps = (
+            torch.sqrt(1 - a_bar) * x_t
+            + torch.sqrt(a_bar) * v_pred
+        )
+    
+        # ---- DDPM mean ----
+        mean = (
+            torch.sqrt(a_bar_prev) * x0 +
+            torch.sqrt(1 - a_bar_prev) * eps
+        )
+    
+        # ---- add noise (except t=0) ----
+        noise = torch.randn_like(x_t)
+        nonzero_mask = (t > 0).float().view(-1,1,1,1,1)
+    
+        sigma = torch.sqrt(
+            (1 - a_bar_prev) / (1 - a_bar) * betas[t].view(-1,1,1,1,1)
+        )
+    
+        x_prev = mean + nonzero_mask * sigma * noise
+    
+        return x_prev
+
 
 
 
