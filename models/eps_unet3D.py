@@ -71,8 +71,8 @@ class ConditionalEpsUNet3D(nn.Module):
 
         self.time_embed = SinusoidalTimeEmbedding(self.tdim)
 
-        # ---- input ----
-        self.in_conv = nn.Conv3d(z_ch + cond_ch, z_ch, 3, padding=1)
+        # ✅ FIXED: input only takes z (no concat)
+        self.in_conv = nn.Conv3d(z_ch, z_ch, 3, padding=1)
 
         # ---- encoder ----
         self.down = nn.Conv3d(z_ch, z_ch, 4, stride=2, padding=1)
@@ -95,34 +95,16 @@ class ConditionalEpsUNet3D(nn.Module):
 
     def forward(self, z, t, cond):
         """
-        z:    (B, C, H, W, D) noisy residual latent
-        cond: (B, Cc, H, W, D) upsampled LR latent
-        t:    (B,) diffusion timestep
+        z:    (B, C, H, W, D)
+        cond: (B, C, H, W, D)
+        t:    (B,)
         """
-        
-        '''print(
-            "UNet forward:",
-            "z_ch =", z.shape[1],
-            "cond is None?", cond is None,
-            "cond_ch =", 0 if cond is None else cond.shape[1],
-        )
-        print("UNet forward id:", id(self))'''
-
-    
-        if self.cond_ch == 0:
-            assert cond is None, "UNet is unconditional but cond was passed"
-        # ---- safety check (dev only) ----
-        assert t.min() >= 0 and t.max() < self.num_timesteps
 
         # ---- timestep embedding ----
         t_emb = timestep_embedding(t, self.tdim)
 
-        # ---- input fusion ----
-        if cond is not None:
-            x = torch.cat([z, cond], dim=1)
-        else:
-            x = z
-        
+        # ✅ FIXED: no concat
+        x = z
         x = self.in_conv(x)
 
         # ---- encoder ----
@@ -131,14 +113,22 @@ class ConditionalEpsUNet3D(nn.Module):
 
         # ---- bottleneck ----
         h = self.mid_block(x, t_emb)
-        
+
+        # ✅ CONDITIONING HERE (key part)
+        if cond is not None:
+            cond_mid = F.interpolate(
+                cond,
+                size=h.shape[2:],
+                mode="trilinear",
+                align_corners=False
+            )
+            h = h + cond_mid   # you can scale this later
+
         if self.temporal_suite is not None:
-            # slice-aware, timestep-gated correction
             h = h + self.temporal_suite(h, t)
-        
+
         # ---- decoder ----
         h = self.up(h)
         h = self.dec_block(h, t_emb)
 
         return self.out(h)
-
