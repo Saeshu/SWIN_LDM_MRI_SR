@@ -93,7 +93,7 @@ class ConditionalEpsUNet3D(nn.Module):
         # ---- output ----
         self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
 
-    def forward(self, z, t, cond):
+    def forward(self, z, t, cond, alpha=1.0):
         """
         z:    (B, C, H, W, D)
         cond: (B, C, H, W, D)
@@ -115,6 +115,7 @@ class ConditionalEpsUNet3D(nn.Module):
         h = self.mid_block(x, t_emb)
 
         # ✅ CONDITIONING HERE (key part)
+        
         if cond is not None:
             cond_mid = F.interpolate(
                 cond,
@@ -122,7 +123,7 @@ class ConditionalEpsUNet3D(nn.Module):
                 mode="trilinear",
                 align_corners=False
             )
-            h = h + cond_mid   # you can scale this later
+            h = h + alpha * cond_mid   # you can scale this later
 
         if self.temporal_suite is not None:
             h = h + self.temporal_suite(h, t)
@@ -132,3 +133,4 @@ class ConditionalEpsUNet3D(nn.Module):
         h = self.dec_block(h, t_emb)
 
         return self.out(h)
+
