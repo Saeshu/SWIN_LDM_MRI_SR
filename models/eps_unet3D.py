@@ -71,7 +71,7 @@ class ConditionalEpsUNet3D(nn.Module):
 
         self.time_embed = SinusoidalTimeEmbedding(self.tdim)
 
-        # ✅ FIXED: input only takes z (no concat)
+        # ---- input ----
         self.in_conv = nn.Conv3d(z_ch, z_ch, 3, padding=1)
 
         # ---- encoder ----
@@ -93,29 +93,38 @@ class ConditionalEpsUNet3D(nn.Module):
         # ---- output ----
         self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
 
-    def forward(self, z, t, cond, alpha=1.0):
+    def forward(self, z, t, cond=None, alpha=1.0):
         """
-        z:    (B, C, H, W, D)
-        cond: (B, C, H, W, D)
+        z:    (B, C, D, H, W)
+        cond: (B, C, D, H, W)
         t:    (B,)
         """
 
         # ---- timestep embedding ----
         t_emb = timestep_embedding(t, self.tdim)
 
-        # ✅ FIXED: no concat
+        # ---- input conditioning (NEW) ----
         x = z
-        x = self.in_conv(x)
+        if cond is not None:
+            cond_resized = F.interpolate(
+                cond,
+                size=z.shape[2:],
+                mode="trilinear",
+                align_corners=False
+            )
+            x = x + alpha * cond_resized
+
+        # ---- input conv ----
+        x1 = self.in_conv(x)   # save for skip
 
         # ---- encoder ----
-        x = self.down(x)
-        x = self.enc_block(x, t_emb)
+        x2 = self.down(x1)
+        x2 = self.enc_block(x2, t_emb)
 
         # ---- bottleneck ----
-        h = self.mid_block(x, t_emb)
+        h = self.mid_block(x2, t_emb)
 
-        # ✅ CONDITIONING HERE (key part)
-        
+        # ---- mid conditioning (keep this too) ----
         if cond is not None:
             cond_mid = F.interpolate(
                 cond,
@@ -123,14 +132,19 @@ class ConditionalEpsUNet3D(nn.Module):
                 mode="trilinear",
                 align_corners=False
             )
-            h = h + alpha * cond_mid   # you can scale this later
+            h = h + alpha * cond_mid
 
+        # ---- optional temporal block ----
         if self.temporal_suite is not None:
             h = h + self.temporal_suite(h, t)
 
         # ---- decoder ----
         h = self.up(h)
+
+        # ---- skip connection (NEW) ----
+        h = h + x1
+
         h = self.dec_block(h, t_emb)
 
+        # ---- output ----
         return self.out(h)
-
