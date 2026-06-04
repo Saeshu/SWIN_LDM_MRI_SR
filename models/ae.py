@@ -5,13 +5,6 @@ import torch.nn as nn
 from .ShapedEncoder3D import AnisotropicSwinBlock, SpatialDownsample3D
 from .Decoder import DecoderBlock, OutputRefinementHead
 ENC_KERNEL_DIM = 4 
-# models/ae.py
-import torch
-import torch.nn as nn
-
-from .ShapedEncoder3D import AnisotropicSwinBlock, SpatialDownsample3D
-from .Decoder import DecoderBlock, OutputRefinementHead
-ENC_KERNEL_DIM = 4 
 class AutoEncoder(nn.Module):
     def __init__(self):
         super().__init__()
@@ -48,7 +41,8 @@ class AutoEncoder(nn.Module):
         x = self.enc3(x)
     
         # 🔥 TEMP FIX: make compatible with decoder
-        
+       
+    
         return x, w_E2
 
     def decode(self, z, w_E2=None):
@@ -60,5 +54,3 @@ class AutoEncoder(nn.Module):
     def forward(self, x):
         z, w = self.encode(x)
         return self.decode(z, w)
-          z = self.encode(x)
-          return self.decode(z)
