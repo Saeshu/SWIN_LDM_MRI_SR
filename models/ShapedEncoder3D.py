@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
-
 
 
 class AnisotropicConvSuite(nn.Module):
@@ -40,25 +38,31 @@ class AnisotropicConvSuite(nn.Module):
 
 
 class WindowPool3D(nn.Module):
-    def __init__(self, window_size=(1, 7, 7)):
+    def __init__(self, window_size=(1, 21, 21)):
         super().__init__()
         self.window_size = window_size
-
+        
     def forward(self, x):
         B, C, D, H, W = x.shape
         wd, wh, ww = self.window_size
-
+    
+        # 🔥 clamp properly
+        wd = min(wd, D)
+        wh = min(wh, H)
+        ww = min(ww, W)
+    
+        # 🔥 IMPORTANT: store for reuse
+        self._last_window = (wd, wh, ww)
+    
         x = x.unfold(2, wd, wd) \
              .unfold(3, wh, wh) \
              .unfold(4, ww, ww)
-
+    
         x = x.contiguous().view(B, C, -1, wd * wh * ww)
-
-        # 🔥 IMPORTANT: less smoothing than pure mean
+    
         tokens = x.mean(dim=-1) + 0.5 * x.std(dim=-1)
-
-        tokens = tokens.permute(0, 2, 1)  # [B, N, C]
-
+        tokens = tokens.permute(0, 2, 1)
+    
         return tokens
 
 
@@ -71,23 +75,26 @@ class KernelMixingAttention(nn.Module):
             num_heads=num_heads,
             batch_first=True
         )
-
+        
         self.proj = nn.Linear(embed_dim, num_kernels)
-
+        
+        print("attn embed:", self.attn.embed_dim)
+        print("attn num_heads:", self.attn.num_heads)
     def forward(self, tokens):
         attn_out, _ = self.attn(tokens, tokens, tokens)
         logits = self.proj(attn_out)
         weights = F.softmax(logits, dim=-1)
+        
         return weights  # [B, N, K]
 
-
+   
 class AnisotropicSwinBlock(nn.Module):
     def __init__(
         self,
         in_ch,
         out_ch,
         depth_kernels=(3, 5, 7),
-        window_size=(1, 7, 7),
+        window_size=(1, 21, 21),
         use_attention=True
     ):
         super().__init__()
@@ -114,50 +121,56 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-
-        feats = self.conv_suite(x)  # list of [B, out_ch, D, H, W]
-
+    
+        x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
+        B, C_s, D_s, H_s, W_s = x_small.shape
+    
+        feats = self.conv_suite(x)
+    
         if self.use_attention:
-            tokens = self.window_pool(x)  # [B, N, C]
-
+            tokens = self.window_pool(x_small)  # [B, N, C]
+    
             weights = self.attn(tokens)  # [B, N, K]
-
-            wd, wh, ww = self.window_size
-
-            Nd = D // wd
-            Nh = H // wh
-            Nw = W // ww
-
-            # reshape back to grid
-            weights = weights.view(B, Nd, Nh, Nw, self.num_kernels)
-
-            # move kernel dim forward
+    
+            wd, wh, ww = self.window_pool._last_window
+    
+            Nd = D_s // wd
+            Nh = H_s // wh
+            Nw = W_s // ww
+    
+            assert tokens.shape[1] == Nd * Nh * Nw, \
+                f"Token mismatch: {tokens.shape[1]} vs {Nd*Nh*Nw}"
+            assert wd > 0 and wh > 0 and ww > 0, "Invalid window size"
+            assert D_s >= wd and H_s >= wh and W_s >= ww, "Window larger than input"
+            weights = weights.reshape(B, Nd, Nh, Nw, self.num_kernels)
+    
             weights = weights.permute(0, 4, 1, 2, 3)  # [B, K, Nd, Nh, Nw]
-
-            # 🔥 CRITICAL: upsample to full resolution
+    
             weights = F.interpolate(
                 weights,
                 size=(D, H, W),
                 mode="trilinear",
                 align_corners=False
-            )  # [B, K, D, H, W]
-
+            )
+    
+            # 🔥 re-normalize
+            weights = F.softmax(weights, dim=1)
+    
         else:
             weights = F.softmax(self.alpha, dim=0)
-            weights = weights.view(1, self.num_kernels, 1, 1, 1).expand(B, -1, D, H, W)
-
-        # 🔥 spatially varying fusion
-        y = 0
-        for i, f in enumerate(feats):
-            y = y + weights[:, i:i+1] * f
-
+            weights = weights.view(1, self.num_kernels, 1, 1, 1)
+            weights = weights.expand(B, -1, D, H, W)
+    
+        y = sum(weights[:, i:i+1] * f for i, f in enumerate(feats))
+    
         y = self.act(self.norm(y))
-
+    
         if return_weights:
             return y, weights
-
+    
         return y
 
+        
 
 class SpatialDownsample3D(nn.Module):
     def __init__(self):
