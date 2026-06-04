@@ -48,9 +48,7 @@ class AutoEncoder(nn.Module):
         x = self.enc3(x)
     
         # 🔥 TEMP FIX: make compatible with decoder
-        if w_E2 is not None:
-            w_E2 = w_E2.mean(dim=(2,3,4))  # [B, K]
-    
+        
         return x, w_E2
 
     def decode(self, z, w_E2=None):
