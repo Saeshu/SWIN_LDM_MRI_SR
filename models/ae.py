@@ -15,10 +15,11 @@ class AutoEncoder(nn.Module):
 
         self.enc1 = AnisotropicSwinBlock(32, 64, depth_kernels=(3,), use_attention=False)
         
-        self.down1 = nn.Identity()  # 🔥 removed
+        self.down1 = SpatialDownsample3D()  # 🔥 removed
 
-        self.enc2 = AnisotropicSwinBlock(64, 128, depth_kernels=(3,5), use_attention=True)
-        self.enc3 = AnisotropicSwinBlock(128, 256, depth_kernels=(3,5,7), use_attention=True)
+        self.enc2 = AnisotropicSwinBlock(64, 128, depth_kernels=(3,5), use_attention=False)
+        
+        self.enc3 = AnisotropicSwinBlock(128, 256, depth_kernels=(3,), use_attention=False)
 
         # 🔥 NEW: projection instead of mean
         self.latent_proj = nn.Conv3d(256, 1, kernel_size=1)
@@ -36,8 +37,14 @@ class AutoEncoder(nn.Module):
     
         x = self.enc1(x)
         x = self.down1(x)
-    
-        x, w_E2 = self.enc2(x, return_weights=True)
+
+        out = self.enc2(x, return_weights=True)
+        if isinstance(out, tuple):
+            x, w_E2 = out
+        else:
+            x = out
+            w_E2 = None
+            
         x = self.enc3(x)
     
         # 🔥 TEMP FIX: make compatible with decoder
@@ -46,7 +53,11 @@ class AutoEncoder(nn.Module):
         return x, w_E2
 
     def decode(self, z, w_E2=None):
-        z = self.dec2(z, encoder_kernel_skip=w_E2, bias_strength=1.0)
+        #z = self.dec2(z, encoder_kernel_skip=w_E2, bias_strength=1.0)
+        if w_E2 is None:
+            z = self.dec2(z, encoder_kernel_skip=None)
+        else:
+            z = self.dec2(z, encoder_kernel_skip=w_E2)
         z = self.dec1(z)
         z = self.dec0(z)
         return self.out(z)
