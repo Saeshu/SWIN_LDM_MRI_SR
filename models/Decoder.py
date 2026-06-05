@@ -137,42 +137,36 @@ class DecoderBlock(nn.Module):
         self.act = nn.SiLU()
 
     def forward(self, x, encoder_kernel_skip=None, bias_strength=1.0):
-    
-        print("ENTER DecoderBlock, input:", type(x))
+
+        #print("ENTER dec block, x:", type(x))
     
         if self.upsample_enabled:
             x = self.upsample(x)
     
         y = self.heavy(x, encoder_kernel_skip)
     
-        print("EXIT DecoderBlock, output:", None if y is None else y.shape)
+        #print("AFTER heavy, y:", None if y is None else y.shape)
+    
+        #assert y is not None, "heavy() returned None ❌"
+    
+        y = self.act(self.norm(y))
     
         return y
     
     
     def heavy(self, x, encoder_kernel_skip):
+
         feats = self.conv_suite(x)
     
-        print("Num feats:", len(feats))
-        print("Feat shape:", feats[0].shape)
+        #print("feats:", len(feats), feats[0].shape)
     
         B, C, D, H, W = feats[0].shape
     
-        if encoder_kernel_skip is not None and encoder_kernel_skip.dim() == 5:
-            print("Weights shape:", encoder_kernel_skip.shape)
+        if isinstance(encoder_kernel_skip, torch.Tensor) and encoder_kernel_skip.dim() == 5:
+            #print("using encoder weights")
     
-            weights = F.avg_pool3d(
-                encoder_kernel_skip,
-                kernel_size=(1, 4, 4),
-                stride=(1, 4, 4)
-            )
-    
-            weights = F.interpolate(
-                weights,
-                size=(D, H, W),
-                mode="trilinear",
-                align_corners=False
-            )
+            weights = F.avg_pool3d(...)
+            weights = F.interpolate(...)
     
             K = min(weights.shape[1], self.num_dec_kernels)
             weights = weights[:, :K]
@@ -181,6 +175,8 @@ class DecoderBlock(nn.Module):
             weights = F.softmax(weights, dim=1)
     
         else:
+            #print("using fallback weights")
+    
             logits = self.logits
             weights = F.softmax(logits, dim=0)
             weights = weights.view(1, self.num_dec_kernels, 1, 1, 1).expand(B, -1, D, H, W)
@@ -188,10 +184,10 @@ class DecoderBlock(nn.Module):
         y = torch.zeros_like(feats[0])
     
         for i, f in enumerate(feats):
-            assert weights.shape[1] > i, f"Weight index {i} out of bounds"
+            assert weights.shape[1] > i, f"weight mismatch at {i}"
             y = y + weights[:, i:i+1] * f
     
-        print("y shape:", y.shape)
+        print("RETURNING y:", y.shape)
     
         return y
             
