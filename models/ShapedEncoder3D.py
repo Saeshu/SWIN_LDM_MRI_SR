@@ -6,7 +6,7 @@ import torch.nn.functional as F
 class AnisotropicConvSuite(nn.Module):
     def __init__(self, in_ch, out_ch, depth_kernels=(3, 5, 7)):
         super().__init__()
-
+        
         self.conv_3x3x1 = nn.Conv3d(
             in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
         )
@@ -78,8 +78,8 @@ class KernelMixingAttention(nn.Module):
         
         self.proj = nn.Linear(embed_dim, num_kernels)
         
-        print("attn embed:", self.attn.embed_dim)
-        print("attn num_heads:", self.attn.num_heads)
+        #print("attn embed:", self.attn.embed_dim)
+        #print("attn num_heads:", self.attn.num_heads)
     def forward(self, tokens):
         attn_out, _ = self.attn(tokens, tokens, tokens)
         logits = self.proj(attn_out)
@@ -102,11 +102,13 @@ class AnisotropicSwinBlock(nn.Module):
         self.conv_suite = AnisotropicConvSuite(
             in_ch, out_ch, depth_kernels
         )
+        reduced_ch = max(1, in_ch // 2)
+        self.reduce = nn.Conv3d(in_ch, reduced_ch, 1)
 
         self.use_attention = use_attention
         self.num_kernels = self.conv_suite.num_paths
         self.window_size = window_size
-
+        
         if use_attention:
             self.window_pool = WindowPool3D(window_size)
             self.attn = KernelMixingAttention(
@@ -121,14 +123,16 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-    
         x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
+
+        x_small = self.reduce(x_small)
+
         B, C_s, D_s, H_s, W_s = x_small.shape
     
         feats = self.conv_suite(x)
     
         if self.use_attention:
-            tokens = self.window_pool(x_small)  # [B, N, C]
+            tokens = self.window_pool(x_small) # [B, N, C]
     
             weights = self.attn(tokens)  # [B, N, K]
     
