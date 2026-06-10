@@ -5,6 +5,7 @@ from models.utils import timestep_embedding
 from Diffusion.convsuite import TimeGatedConvSuite
 #from Diffusion.schedule import SinusoidalTimeEmbedding
 from Diffusion.LinearNoise import NoiseScheduler
+from Diffusion.TimeKernelMixing import TimeKernelMixing
 #SinusoidalTimeEmbedding = SinusoidalTimeEmbedding(128)
 scheduler = NoiseScheduler()
 
@@ -123,6 +124,8 @@ class ConditionalEpsUNet3D(nn.Module):
 
         # ---- bottleneck ----
         h = self.mid_block(x2, t_emb)
+        weights = self.kernel_mixer(h, t_emb)
+
 
         # ---- mid conditioning (keep this too) ----
         if cond is not None:
