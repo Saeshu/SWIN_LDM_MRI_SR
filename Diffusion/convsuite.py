@@ -55,40 +55,44 @@ class TimeGatedConvSuite(nn.Module):
 
         self.time_embed = SinusoidalTimeEmbedding(time_dim)
         self.time_mlp = nn.Sequential(
-            nn.Linear(time_dim, time_dim),
-            nn.SiLU(),
-            nn.Linear(time_dim, 3)  # gates for A, B, C
+        nn.Linear(time_dim, channels),
+        nn.SiLU(),
+        nn.Linear(channels, channels)
         )
+
+        self.to_logits = nn.Conv3d(channels, 3, kernel_size=1)
 
         self.spatial = SpatialSuite(channels)
         self.mid = MidSliceSuite(channels)
         self.long = LongSliceSuite(channels)
 
     def forward(self, x, t):
-        """
-        x: (B, C, H, W, D)
-        t: (B,) diffusion timestep
-        """
-
-        # --- compute gates ---
+        B, C, D, H, W = x.shape
+    
+        # time embedding
         te = self.time_embed(t)
-        gates = self.time_mlp(te)           # (B, 3)
-        gates = torch.softmax(gates, dim=-1)
-
-        gA, gB, gC = gates[:, 0], gates[:, 1], gates[:, 2]
-
-        # reshape for broadcasting
-        gA = gA[:, None, None, None, None]
-        gB = gB[:, None, None, None, None]
-        gC = gC[:, None, None, None, None]
-
-        # --- specialist outputs ---
+        t_feat = self.time_mlp(te)[:, :, None, None, None]
+    
+        # inject time into features
+        h = x + t_feat
+    
+        # spatial logits
+        logits = self.to_logits(h)  # (B, 3, D, H, W)
+    
+        weights = torch.softmax(logits, dim=1)
+    
+        # split weights
+        wA = weights[:, 0:1]
+        wB = weights[:, 1:2]
+        wC = weights[:, 2:3]
+    
+        # specialist outputs
         out = (
-            gA * self.spatial(x) +
-            gB * self.mid(x) +
-            gC * self.long(x)
+            wA * self.spatial(x) +
+            wB * self.mid(x) +
+            wC * self.long(x)
         )
-
+    
         return out
 
 
