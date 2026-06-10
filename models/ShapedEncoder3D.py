@@ -1,157 +1,188 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils import timestep_embedding
-from Diffusion.convsuite import TimeGatedConvSuite
-#from Diffusion.schedule import SinusoidalTimeEmbedding
-from Diffusion.LinearNoise import NoiseScheduler
-from Diffusion.TimeKernelMixing import TimeKernelMixing
-#SinusoidalTimeEmbedding = SinusoidalTimeEmbedding(128)
-scheduler = NoiseScheduler()
 
-class SinusoidalTimeEmbedding(nn.Module):
-    def __init__(self, dim):
+
+class AnisotropicConvSuite(nn.Module):
+    def __init__(self, in_ch, out_ch, depth_kernels=(3, 5, 7)):
         super().__init__()
-        self.dim = dim
-
-    def forward(self, t):
-        """
-        t: (B,) LongTensor
-        """
-        device = t.device
-        half = self.dim // 2
-
-        emb = torch.log(torch.tensor(10000.0, device=device)) / (half - 1)
-        emb = torch.exp(torch.arange(half, device=device) * -emb)
-        emb = t[:, None] * emb[None, :]
-        emb = torch.cat([emb.sin(), emb.cos()], dim=-1)
-        return emb
-
-class TimeMLP(nn.Module):
-    def __init__(self, tdim, channels):
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(tdim, channels),
-            nn.SiLU(),
-            nn.Linear(channels, channels)
+        
+        self.conv_3x3x1 = nn.Conv3d(
+            in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
         )
 
-    def forward(self, t_emb):
-        return self.mlp(t_emb)[:, :, None, None, None]
+        self.depth_convs = nn.ModuleList([
+            nn.Conv3d(
+                in_ch, out_ch,
+                kernel_size=(k, 1, 1),
+                padding=(k // 2, 0, 0)
+            )
+            for k in depth_kernels
+        ])
 
-class ResBlock3D(nn.Module):
-    def __init__(self, channels, tdim):
+        self.conv_1x1x1 = nn.Conv3d(in_ch, out_ch, kernel_size=1)
+
+        self.num_paths = 1 + len(depth_kernels) + 1
+
+    def forward(self, x):
+        feats = []
+
+        feats.append(self.conv_3x3x1(x))
+
+        for conv in self.depth_convs:
+            feats.append(conv(x))
+
+        feats.append(self.conv_1x1x1(x))
+
+        return feats
+
+
+class WindowPool3D(nn.Module):
+    def __init__(self, window_size=(1, 21, 21)):
         super().__init__()
-        self.conv1 = nn.Conv3d(channels, channels, 3, padding=1)
-        self.conv2 = nn.Conv3d(channels, channels, 3, padding=1)
-        self.time_mlp = TimeMLP(tdim, channels)
-        self.norm = nn.GroupNorm(8, channels)
+        self.window_size = window_size
+        
+    def forward(self, x):
+        B, C, D, H, W = x.shape
+        wd, wh, ww = self.window_size
+    
+        # 🔥 clamp properly
+        wd = min(wd, D)
+        wh = min(wh, H)
+        ww = min(ww, W)
+    
+        # 🔥 IMPORTANT: store for reuse
+        self._last_window = (wd, wh, ww)
+    
+        x = x.unfold(2, wd, wd) \
+             .unfold(3, wh, wh) \
+             .unfold(4, ww, ww)
+    
+        x = x.contiguous().view(B, C, -1, wd * wh * ww)
+    
+        tokens = x.mean(dim=-1) + 0.5 * x.std(dim=-1)
+        tokens = tokens.permute(0, 2, 1)
+    
+        return tokens
 
-    def forward(self, x, t_emb):
-        h = self.norm(x)
-        h = F.silu(self.conv1(h))
-        h = h + self.time_mlp(t_emb)
-        h = F.silu(self.conv2(h))
-        return x + h
 
-class ConditionalEpsUNet3D(nn.Module):
+class KernelMixingAttention(nn.Module):
+    def __init__(self, embed_dim, num_kernels, num_heads=4):
+        super().__init__()
+
+        self.attn = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            batch_first=True
+        )
+        
+        self.proj = nn.Linear(embed_dim, num_kernels)
+        
+        #print("attn embed:", self.attn.embed_dim)
+        #print("attn num_heads:", self.attn.num_heads)
+    def forward(self, tokens):
+        attn_out, _ = self.attn(tokens, tokens, tokens)
+        logits = self.proj(attn_out)
+        weights = F.softmax(logits, dim=-1)
+        
+        return weights  # [B, N, K]
+
+   
+class AnisotropicSwinBlock(nn.Module):
     def __init__(
         self,
-        z_ch,
-        cond_ch,
-        tdim=128,
-        num_timesteps=50,
-        use_temporal_suite=True,
+        in_ch,
+        out_ch,
+        depth_kernels=(3, 5, 7),
+        window_size=(1, 21, 21),
+        use_attention=True
     ):
         super().__init__()
-        self.z_ch = z_ch
-        self.cond_ch = cond_ch
-        self.tdim = tdim
-        self.num_timesteps = num_timesteps
-        self.use_temporal_suite = use_temporal_suite
-        self.temporal_suite = TimeGatedConvSuite(z_ch)        
-        self.kernel_mixer = TimeKernelMixing(z_ch, num_kernels=4)
-        self.time_embed = SinusoidalTimeEmbedding(self.tdim)
 
-        # ---- input ----
-        self.in_conv = nn.Conv3d(z_ch, z_ch, 3, padding=1)
+        self.conv_suite = AnisotropicConvSuite(
+            in_ch, out_ch, depth_kernels
+        )
+        reduced_ch = max(1, in_ch // 2)
+        self.reduce = nn.Conv3d(in_ch, reduced_ch, 1)
 
-        # ---- encoder ----
-        self.down = nn.Conv3d(z_ch, z_ch, 4, stride=2, padding=1)
-        self.enc_block = ResBlock3D(z_ch, tdim)
-
-        # ---- bottleneck ----
-        self.mid_block = ResBlock3D(z_ch, tdim)
-
-        if use_temporal_suite:
-            self.temporal_suite = TimeGatedConvSuite(z_ch)
+        self.use_attention = use_attention
+        self.num_kernels = self.conv_suite.num_paths
+        self.window_size = window_size
+        
+        if use_attention:
+            self.window_pool = WindowPool3D(window_size)
+            self.attn = KernelMixingAttention(
+                embed_dim=in_ch,
+                num_kernels=self.num_kernels
+            )
         else:
-            self.temporal_suite = None
+            self.alpha = nn.Parameter(torch.ones(self.num_kernels))
 
-        # ---- decoder ----
-        self.up = nn.ConvTranspose3d(z_ch, z_ch, 4, stride=2, padding=1)
-        self.dec_block = ResBlock3D(z_ch, tdim)
+        self.norm = nn.GroupNorm(8, out_ch)
+        self.act = nn.SiLU()
 
-        # ---- output ----
-        self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
+    def forward(self, x, return_weights=False):
+        B, C, D, H, W = x.shape
+        x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
 
-    def forward(self, z, t, cond=None, alpha=1.0, encoder_prior=None):
-        """
-        z:    (B, C, D, H, W)
-        cond: (B, C, D, H, W)
-        t:    (B,)
-        """
+        x_small = self.reduce(x_small)
 
-        # ---- timestep embedding ----
-        t_emb = timestep_embedding(t, self.tdim)
-
-        # ---- input conditioning (NEW) ----
-        x = z
-        if cond is not None:
-            cond_resized = F.interpolate(
-                cond,
-                size=z.shape[2:],
+        B, C_s, D_s, H_s, W_s = x_small.shape
+    
+        feats = self.conv_suite(x)
+    
+        if self.use_attention:
+            tokens = self.window_pool(x_small) # [B, N, C]
+    
+            weights = self.attn(tokens)  # [B, N, K]
+    
+            wd, wh, ww = self.window_pool._last_window
+    
+            Nd = D_s // wd
+            Nh = H_s // wh
+            Nw = W_s // ww
+    
+            assert tokens.shape[1] == Nd * Nh * Nw, \
+                f"Token mismatch: {tokens.shape[1]} vs {Nd*Nh*Nw}"
+            assert wd > 0 and wh > 0 and ww > 0, "Invalid window size"
+            assert D_s >= wd and H_s >= wh and W_s >= ww, "Window larger than input"
+            weights = weights.reshape(B, Nd, Nh, Nw, self.num_kernels)
+    
+            weights = weights.permute(0, 4, 1, 2, 3)  # [B, K, Nd, Nh, Nw]
+    
+            weights = F.interpolate(
+                weights,
+                size=(D, H, W),
                 mode="trilinear",
                 align_corners=False
             )
-            x = x + alpha * cond_resized
+    
+            # 🔥 re-normalize
+            weights = F.softmax(weights, dim=1)
+    
+        else:
+            weights = F.softmax(self.alpha, dim=0)
+            weights = weights.view(1, self.num_kernels, 1, 1, 1)
+            weights = weights.expand(B, -1, D, H, W)
+    
+        y = sum(weights[:, i:i+1] * f for i, f in enumerate(feats))
+    
+        y = self.act(self.norm(y))
+    
+        if return_weights:
+            return y, weights
+    
+        return y
 
-        # ---- input conv ----
-        x1 = self.in_conv(x)   # save for skip
-
-        # ---- encoder ----
-        x2 = self.down(x1)
-        x2 = self.enc_block(x2, t_emb)
-
-        # ---- bottleneck ----
-        h = self.mid_block(x2, t_emb)
         
-        
 
+class SpatialDownsample3D(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.pool = nn.AvgPool3d(
+            kernel_size=(1, 2, 2),
+            stride=(1, 2, 2)
+        )
 
-        # ---- mid conditioning (keep this too) ----
-        if cond is not None:
-            cond_mid = F.interpolate(
-                cond,
-                size=h.shape[2:],
-                mode="trilinear",
-                align_corners=False
-            )
-            h = h + alpha * cond_mid
-        
-        
-        # ---- optional temporal block ----
-        if self.temporal_suite is not None:
-            
-            h = h + self.temporal_suite(h, t, encoder_prior)
-
-        # ---- decoder ----
-        h = self.up(h)
-
-        # ---- skip connection (NEW) ----
-        h = h + x1
-
-        h = self.dec_block(h, t_emb)
-
-        # ---- output ----
-        return self.out(h)
+    def forward(self, x):
+        return self.pool(x)
