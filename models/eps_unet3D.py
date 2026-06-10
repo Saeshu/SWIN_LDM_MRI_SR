@@ -69,6 +69,8 @@ class ConditionalEpsUNet3D(nn.Module):
         self.tdim = tdim
         self.num_timesteps = num_timesteps
         self.use_temporal_suite = use_temporal_suite
+        self.conv_suite = TimeGatedConvSuite(z_ch)
+        self.kernel_mixer = TimeKernelMixing(z_ch, num_kernels=4)
 
         self.time_embed = SinusoidalTimeEmbedding(self.tdim)
 
