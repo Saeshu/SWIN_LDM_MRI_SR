@@ -96,7 +96,7 @@ class ConditionalEpsUNet3D(nn.Module):
         # ---- output ----
         self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
 
-    def forward(self, z, t, cond=None, alpha=1.0):
+    def forward(self, z, t, cond=None, alpha=1.0, encoder_prior=None):
         """
         z:    (B, C, D, H, W)
         cond: (B, C, D, H, W)
@@ -138,7 +138,7 @@ class ConditionalEpsUNet3D(nn.Module):
                 align_corners=False
             )
             h = h + alpha * cond_mid
-
+        self.temporal_suite = None
         # ---- optional temporal block ----
         if self.temporal_suite is not None:
             h = h + self.temporal_suite(h, t)
