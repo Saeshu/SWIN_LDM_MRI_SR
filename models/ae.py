@@ -23,7 +23,7 @@ class AutoEncoder(nn.Module):
         self.enc3 = AnisotropicSwinBlock(128, 256, depth_kernels=(3,), use_attention=False)
 
         # 🔥 NEW: projection instead of mean
-        self.latent_proj = nn.Conv3d(64, 8, kernel_size=1)
+        #self.latent_proj = nn.Conv3d(64, 8, kernel_size=1)
 
         # ---- decoder ----
         self.dec2 = DecoderBlock(256, 128, use_depth=True, enc_kernel_dim=ENC_KERNEL_DIM, upsample=True)
@@ -39,9 +39,9 @@ class AutoEncoder(nn.Module):
     
         x = self.enc1(x)
         x = self.down1(x)
-        print("Before projection:", x.shape)
-        z = self.latent_proj(x)
-        print("Prior shape:", z.shape)
+        #print("Before projection:", x.shape)
+        #z = self.latent_proj(x)
+        #print("Prior shape:", z.shape)
         x2 = x
 
         out = self.enc2(x, return_weights=True)
@@ -52,7 +52,7 @@ class AutoEncoder(nn.Module):
             w_E2 = None
             
         x = self.enc3(x)
-    
+        z = x
         # 🔥 TEMP FIX: make compatible with decoder
        
         
