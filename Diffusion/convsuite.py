@@ -89,7 +89,7 @@ class TimeGatedConvSuite(nn.Module):
         )
             print("Prior received:", prior.shape)
             prior_logits = self.prior_proj(prior)  # (B, 3, D, H, W)
-            logits = logits + 3.0 * prior_logits '''make learnable later'''
+            logits = logits + 3.0 * prior_logits #'''make learnable later'''
 
         # ---- convert to weights ----
         weights = torch.softmax(logits, dim=1)
