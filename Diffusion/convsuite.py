@@ -52,61 +52,45 @@ class LongSliceSuite(nn.Module):
 class TimeGatedConvSuite(nn.Module):
     def __init__(self, channels, time_dim=128):
         super().__init__()
-        self.prior_proj = nn.Conv3d(64, 3, kernel_size=1)
+
         self.time_embed = SinusoidalTimeEmbedding(time_dim)
         self.time_mlp = nn.Sequential(
-        nn.Linear(time_dim, channels),
-        nn.SiLU(),
-        nn.Linear(channels, channels)
+            nn.Linear(time_dim, time_dim),
+            nn.SiLU(),
+            nn.Linear(time_dim, 3)  # gates for A, B, C
         )
-
-        self.to_logits = nn.Conv3d(channels, 3, kernel_size=1)
 
         self.spatial = SpatialSuite(channels)
         self.mid = MidSliceSuite(channels)
         self.long = LongSliceSuite(channels)
 
-    def forward(self, x, t, encoder_prior=None):
-        B, C, D, H, W = x.shape
+    def forward(self, x, t):
+        """
+        x: (B, C, H, W, D)
+        t: (B,) diffusion timestep
+        """
 
-        # ---- time embedding ----
+        # --- compute gates ---
         te = self.time_embed(t)
-        t_feat = self.time_mlp(te)[:, :, None, None, None]
+        gates = self.time_mlp(te)           # (B, 3)
+        gates = torch.softmax(gates, dim=-1)
 
-        # inject time into features
-        h = x + t_feat
+        gA, gB, gC = gates[:, 0], gates[:, 1], gates[:, 2]
 
-        # ---- compute logits from features ----
-        logits = self.to_logits(h)   # (B, 3, D, H, W)
+        # reshape for broadcasting
+        gA = gA[:, None, None, None, None]
+        gB = gB[:, None, None, None, None]
+        gC = gC[:, None, None, None, None]
 
-        # ---- inject encoder prior ----
-        if encoder_prior is not None:
-            prior = F.interpolate(
-            encoder_prior,
-            size=h.shape[2:],   # match spatial dims of h
-            mode="trilinear",
-            align_corners=False
-        )
-            print("Prior received:", prior.shape)
-            prior_logits = self.prior_proj(prior)  # (B, 3, D, H, W)
-            logits = logits + 3.0 * prior_logits #'''make learnable later'''
-
-        # ---- convert to weights ----
-        weights = torch.softmax(logits, dim=1)
-
-        # ---- split weights ----
-        wA = weights[:, 0:1]
-        wB = weights[:, 1:2]
-        wC = weights[:, 2:3]
-
-        # ---- specialist convs ----
+        # --- specialist outputs ---
         out = (
-            wA * self.spatial(x) +
-            wB * self.mid(x) +
-            wC * self.long(x)
+            gA * self.spatial(x) +
+            gB * self.mid(x) +
+            gC * self.long(x)
         )
-        print(weights[0, :, D//2, H//2, W//2])
+
         return out
+
 
     
 
@@ -126,4 +110,3 @@ class BottleneckBlock(nn.Module):
         h = h + self.temporal_suite(h, t)
 
         return h
-
