@@ -1,10 +1,97 @@
 # models/ae.py
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .ShapedEncoder3D import AnisotropicSwinBlock, SpatialDownsample3D
 from .Decoder import DecoderBlock, OutputRefinementHead
-ENC_KERNEL_DIM = 4 
+ENC_KERNEL_DIM = 4
+
+
+
+
+class WE2Conditioning(nn.Module):
+    def __init__(self, hidden_ch=64):
+        super().__init__()
+
+        self.hidden_ch = hidden_ch
+
+        # lazy init
+        self.proj = None
+        self.to_scale = None
+        self.to_shift = None
+        self.scale_proj = None
+        self.shift_proj = None
+
+    def forward(self, h, w_e2):
+        """
+        h:    [B, C, D, H, W]   (UNet features, e.g. 256 channels)
+        w_e2: [B, K, D, H, W]   (kernel weights, e.g. 4–6 channels)
+        """
+
+        # -----------------------------
+        # 1. Resize w_E2 → match h spatial dims
+        # -----------------------------
+        w = F.interpolate(
+            w_e2,
+            size=h.shape[2:],
+            mode="trilinear",
+            align_corners=False
+        )
+
+        # -----------------------------
+        # 2. Normalize (CRITICAL)
+        # -----------------------------
+        std = w.std(dim=(2,3,4), keepdim=True)
+        std = torch.clamp(std, min=1e-3)   # 🔥 safer
+
+        w = w / std
+
+        # -----------------------------
+        # 3. Lazy initialize layers (first forward pass)
+        # -----------------------------
+        if self.proj is None:
+            in_ch = w.shape[1]        # dynamic (e.g. 4)
+            out_ch = h.shape[1]       # e.g. 256
+
+            self.proj = nn.Sequential(
+                nn.Conv3d(in_ch, self.hidden_ch, kernel_size=1),
+                nn.SiLU(),
+                nn.Conv3d(self.hidden_ch, self.hidden_ch, kernel_size=3, padding=1),
+                nn.SiLU()
+            ).to(h.device)
+
+            self.to_scale = nn.Conv3d(self.hidden_ch, self.hidden_ch, kernel_size=1).to(h.device)
+            self.to_shift = nn.Conv3d(self.hidden_ch, self.hidden_ch, kernel_size=1).to(h.device)
+
+            # project to match h channels
+            self.scale_proj = nn.Conv3d(self.hidden_ch, out_ch, kernel_size=1).to(h.device)
+            self.shift_proj = nn.Conv3d(self.hidden_ch, out_ch, kernel_size=1).to(h.device)
+
+        # -----------------------------
+        # 4. Feature extraction
+        # -----------------------------
+        w_feat = self.proj(w)   # [B, hidden_ch, ...]
+
+        # -----------------------------
+        # 5. Compute modulation
+        # -----------------------------
+        scale = torch.tanh(self.to_scale(w_feat))
+        shift = self.to_shift(w_feat)
+
+        # -----------------------------
+        # 6. Match h channels
+        # -----------------------------
+        scale = self.scale_proj(scale)
+        shift = self.shift_proj(shift)
+
+        # -----------------------------
+        # 7. FiLM modulation (STABLE)
+        # -----------------------------
+        h = h * (1 + 0.01 * scale) + 0.01 * shift
+
+        return h
+        
 class AutoEncoder(nn.Module):
     def __init__(self):
         super().__init__()
