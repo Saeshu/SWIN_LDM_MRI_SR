@@ -5,6 +5,7 @@ from models.utils import timestep_embedding
 from Diffusion.convsuite import TimeGatedConvSuite
 #from Diffusion.schedule import SinusoidalTimeEmbedding
 from Diffusion.LinearNoise import NoiseScheduler
+from models.ae import WE2Conditioning
 #SinusoidalTimeEmbedding = SinusoidalTimeEmbedding(128)
 scheduler = NoiseScheduler()
 
@@ -68,6 +69,7 @@ class ConditionalEpsUNet3D(nn.Module):
         self.tdim = tdim
         self.num_timesteps = num_timesteps
         self.use_temporal_suite = use_temporal_suite
+        self.we2_cond = WE2Conditioning()
 
         self.time_embed = SinusoidalTimeEmbedding(self.tdim)
 
@@ -93,17 +95,11 @@ class ConditionalEpsUNet3D(nn.Module):
         # ---- output ----
         self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
 
-    def forward(self, z, t, cond=None, alpha=1.0):
-        """
-        z:    (B, C, D, H, W)
-        cond: (B, C, D, H, W)
-        t:    (B,)
-        """
+    def forward(self, z, t, cond=None, w_e2=None, alpha=1.0):
 
-        # ---- timestep embedding ----
         t_emb = timestep_embedding(t, self.tdim)
-
-        # ---- input conditioning (NEW) ----
+    
+        # ---- input conditioning ----
         x = z
         if cond is not None:
             cond_resized = F.interpolate(
@@ -113,18 +109,18 @@ class ConditionalEpsUNet3D(nn.Module):
                 align_corners=False
             )
             x = x + alpha * cond_resized
-
+    
         # ---- input conv ----
-        x1 = self.in_conv(x)   # save for skip
-
+        x1 = self.in_conv(x)
+    
         # ---- encoder ----
         x2 = self.down(x1)
         x2 = self.enc_block(x2, t_emb)
-
-        # ---- bottleneck ----
+    
+        # ---- bottleneck (THIS is the real h) ----
         h = self.mid_block(x2, t_emb)
-
-        # ---- mid conditioning (keep this too) ----
+    
+        # ---- mid conditioning ----
         if cond is not None:
             cond_mid = F.interpolate(
                 cond,
@@ -133,18 +129,26 @@ class ConditionalEpsUNet3D(nn.Module):
                 align_corners=False
             )
             h = h + alpha * cond_mid
-
-        # ---- optional temporal block ----
+    
+        # ---- 🔥 w_E2 conditioning (PRIMARY place) ----
+        if w_e2 is not None:
+            h = self.we2_cond(h, w_e2)
+    
+        # ---- optional temporal ----
         if self.temporal_suite is not None:
             h = h + self.temporal_suite(h, t)
-
+    
         # ---- decoder ----
         h = self.up(h)
-
-        # ---- skip connection (NEW) ----
+    
+        # ---- skip connection ----
         h = h + x1
-
+    
+        # ---- 🔥 optional second refinement ----
+        #if w_e2 is not None:
+            #h = self.we2_cond(h, w_e2)
+    
+        # ---- final block ----
         h = self.dec_block(h, t_emb)
-
-        # ---- output ----
+    
         return self.out(h)
