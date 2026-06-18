@@ -24,6 +24,18 @@ def center_crop_3d(vol, crop_size):
     ]
 
 
+
+def random_crop_3d(vol, crop_size):
+    D, H, W = vol.shape
+    cd, ch, cw = crop_size
+
+    d = np.random.randint(0, D - cd + 1)
+    h = np.random.randint(0, H - ch + 1)
+    w = np.random.randint(0, W - cw + 1)
+
+    return vol[d:d+cd, h:h+ch, w:w+cw]
+
+
 class MRIDataset(Dataset):
     """
     MRI Dataset supporting:
@@ -36,12 +48,14 @@ class MRIDataset(Dataset):
         root_dir,
         crop_size=(128, 256, 256),
         normalize=True,
-        downscale_factor=2,  # None → AE mode # 2-> SR mode
+        downscale_factor=None,  # None → AE mode, int → SR mode
+        augment=True
     ):
         self.root_dir = root_dir
         self.crop_size = crop_size
         self.normalize = normalize
         self.downscale_factor = downscale_factor
+        self.augment = augment
 
         self.files = sorted([
             os.path.join(root_dir, f)
@@ -52,7 +66,7 @@ class MRIDataset(Dataset):
         if len(self.files) == 0:
             raise RuntimeError(f"No NIfTI files found in {root_dir}")
 
-        # Safety: crop must be divisible by downscale
+        # ensure divisibility for SR
         if downscale_factor is not None:
             for c in crop_size:
                 assert c % downscale_factor == 0, \
@@ -62,38 +76,58 @@ class MRIDataset(Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
+        # -----------------------------
+        # Load volume
+        # -----------------------------
         vol = nib.load(self.files[idx]).get_fdata().astype(np.float32)
 
-        # ensure 3D
         if vol.ndim == 4:
             vol = vol[..., 0]
 
-        # FIX AXIS ORDER
-        vol = np.transpose(vol, (2,0,1))
+        # [H, W, D] → [D, H, W]
+        vol = np.transpose(vol, (2, 0, 1))
 
-
-        # normalize
+        # -----------------------------
+        # Normalize (stable for AE)
+        # -----------------------------
         if self.normalize:
             vmin, vmax = np.percentile(vol, (1, 99))
             vol = np.clip(vol, vmin, vmax)
-            vol = (vol - vmin) / (vmax - vmin + 1e-8)
-            vol = vol * 2 - 1
+            vol = (vol - vmin) / (vmax - vmin + 1e-8)  # 🔥 [0,1]
 
-        # center crop
-        vol = center_crop_3d(vol, self.crop_size)
+        # -----------------------------
+        # Random crop (CRITICAL)
+        # -----------------------------
+        vol = random_crop_3d(vol, self.crop_size)
 
-        hr = torch.from_numpy(vol).float().unsqueeze(0)
-        assert hr.dtype == torch.float32
+        # -----------------------------
+        # Augmentation (optional)
+        # -----------------------------
+        if self.augment:
+            if np.random.rand() < 0.5:
+                vol = vol[:, :, ::-1]  # flip W
+
+            if np.random.rand() < 0.5:
+                vol = vol[:, ::-1, :]  # flip H
+
+        # -----------------------------
+        # Convert to tensor
+        # -----------------------------
+        hr = torch.from_numpy(vol.copy()).float().unsqueeze(0)  # [1, D, H, W]
+
+        # -----------------------------
         # AE mode
+        # -----------------------------
         if self.downscale_factor is None:
             return hr
 
-        # SR mode
+        # -----------------------------
+        # SR mode (spatial only)
+        # -----------------------------
         lr = F.avg_pool3d(
             hr.unsqueeze(0),
             kernel_size=(1, self.downscale_factor, self.downscale_factor),
             stride=(1, self.downscale_factor, self.downscale_factor)
         ).squeeze(0)
-        
-        return hr, lr
 
+        return hr, lr
