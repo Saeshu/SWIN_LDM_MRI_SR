@@ -52,16 +52,36 @@ class AutoEncoder(nn.Module):
     
         return x, w_E2
 
-    def decode(self, z, w_E2=None):
-        #z = self.dec2(z, encoder_kernel_skip=w_E2, bias_strength=1.0)
-        if w_E2 is None:
-            z = self.dec2(z, encoder_kernel_skip=None)
-        else:
+    def decode(self, z, w_E2=None, mode="baseline"):
+        """
+        mode:
+            "baseline" → no conditioning
+            "we2"      → kernel bias conditioning
+            "film"     → FiLM conditioning
+        """
+    
+        # -------------------------
+        # Stage 1
+        # -------------------------
+        if mode == "we2" and w_E2 is not None:
             z = self.dec2(z, encoder_kernel_skip=w_E2)
+        else:
+            z = self.dec2(z, encoder_kernel_skip=None)
+    
+        # -------------------------
+        # FiLM injection
+        # -------------------------
+        if mode == "film" and w_E2 is not None:
+            z = self.we2_film(z, w_E2)
+    
+        # -------------------------
+        # Remaining decoder
+        # -------------------------
         z = self.dec1(z)
         z = self.dec0(z)
+    
         return self.out(z)
-
-    def forward(self, x):
-        z, w = self.encode(x)
-        return self.decode(z, w)
+    
+        def forward(self, x):
+            z, w = self.encode(x)
+            return self.decode(z, w)
