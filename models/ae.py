@@ -82,6 +82,6 @@ class AutoEncoder(nn.Module):
     
         return self.out(z)
     
-        def forward(self, x):
+        def forward(self, x, mode = 'baseline'):
             z, w = self.encode(x)
             return self.decode(z, w)
