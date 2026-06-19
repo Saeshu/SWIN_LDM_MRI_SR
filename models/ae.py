@@ -82,6 +82,24 @@ class AutoEncoder(nn.Module):
     
         return self.out(z)
     
-        def forward(self, x, mode = 'baseline'):
-            z, w = self.encode(x)
-            return self.decode(z, w)
+    def forward(self, x, mode="baseline"):
+        """
+        mode:
+            "baseline" → no conditioning
+            "we2"      → kernel bias conditioning
+            "film"     → FiLM conditioning
+        """
+    
+        z, w = self.encode(x)
+    
+        if mode == "baseline":
+            return self.decode(z, None, mode="baseline")
+    
+        elif mode == "we2":
+            return self.decode(z, w, mode="we2")
+    
+        elif mode == "film":
+            return self.decode(z, w, mode="film")
+    
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
