@@ -1,10 +1,86 @@
 # models/ae.py
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 from .ShapedEncoder3D import AnisotropicSwinBlock, SpatialDownsample3D
 from .Decoder import DecoderBlock, OutputRefinementHead
-ENC_KERNEL_DIM = 4 
+ENC_KERNEL_DIM = 4
+class WE2FiLM(nn.Module):
+    def __init__(self, hidden_ch=64):
+        super().__init__()
+
+        self.hidden_ch = hidden_ch
+
+        self.proj = None
+        self.to_scale = None
+        self.to_shift = None
+        self.scale_proj = None
+        self.shift_proj = None
+
+    def forward(self, h, w_e2):
+        """
+        h:    [B, C, D, H, W]
+        w_e2: [B, K, D, H, W]
+        """
+
+        # -----------------------------
+        # Resize
+        # -----------------------------
+        w = F.interpolate(
+            w_e2,
+            size=h.shape[2:],
+            mode="trilinear",
+            align_corners=False
+        )
+
+        # -----------------------------
+        # Normalize (VERY IMPORTANT)
+        # -----------------------------
+        std = w.std(dim=(2,3,4), keepdim=True)
+        std = torch.clamp(std, min=1e-3)
+        w = w / std
+
+        # -----------------------------
+        # Lazy init
+        # -----------------------------
+        if self.proj is None:
+            in_ch = w.shape[1]      # K
+            out_ch = h.shape[1]     # feature channels
+
+            self.proj = nn.Sequential(
+                nn.Conv3d(in_ch, self.hidden_ch, 1),
+                nn.SiLU(),
+                nn.Conv3d(self.hidden_ch, self.hidden_ch, 3, padding=1),
+                nn.SiLU()
+            ).to(h.device)
+
+            self.to_scale = nn.Conv3d(self.hidden_ch, self.hidden_ch, 1).to(h.device)
+            self.to_shift = nn.Conv3d(self.hidden_ch, self.hidden_ch, 1).to(h.device)
+
+            self.scale_proj = nn.Conv3d(self.hidden_ch, out_ch, 1).to(h.device)
+            self.shift_proj = nn.Conv3d(self.hidden_ch, out_ch, 1).to(h.device)
+
+        # -----------------------------
+        # Feature extraction
+        # -----------------------------
+        w_feat = self.proj(w)
+
+        # -----------------------------
+        # Generate modulation
+        # -----------------------------
+        scale = torch.tanh(self.to_scale(w_feat))
+        shift = self.to_shift(w_feat)
+
+        scale = self.scale_proj(scale)
+        shift = self.shift_proj(shift)
+
+        # -----------------------------
+        # 🔥 FiLM (WEAK)
+        # -----------------------------
+        h = h * (1 + 0.01 * scale) + 0.01 * shift
+
+        return h
+        
 class AutoEncoder(nn.Module):
     def __init__(self):
         super().__init__()
