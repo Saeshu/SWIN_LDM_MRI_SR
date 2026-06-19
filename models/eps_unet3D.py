@@ -5,7 +5,7 @@ from models.utils import timestep_embedding
 from Diffusion.convsuite import TimeGatedConvSuite
 #from Diffusion.schedule import SinusoidalTimeEmbedding
 from Diffusion.LinearNoise import NoiseScheduler
-from models.ae import WE2Conditioning
+from models.ae import WE2FiLM
 #SinusoidalTimeEmbedding = SinusoidalTimeEmbedding(128)
 scheduler = NoiseScheduler()
 
