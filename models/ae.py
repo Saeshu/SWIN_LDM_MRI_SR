@@ -84,7 +84,7 @@ class WE2FiLM(nn.Module):
 class AutoEncoder(nn.Module):
     def __init__(self):
         super().__init__()
-
+        self.we2 = WE2FiLM()
         # ---- encoder ----
         self.enc0 = AnisotropicSwinBlock(1, 32, depth_kernels=(), use_attention=False)
         self.down0 = SpatialDownsample3D()
@@ -98,7 +98,7 @@ class AutoEncoder(nn.Module):
         self.enc3 = AnisotropicSwinBlock(128, 256, depth_kernels=(3,), use_attention=False)
 
         # 🔥 NEW: projection instead of mean
-        self.latent_proj = nn.Conv3d(256, 1, kernel_size=1)
+        self.latent_proj = nn.Conv3d(256, 4, kernel_size=1)
 
         # ---- decoder ----
         self.dec2 = DecoderBlock(256, 128, use_depth=True, enc_kernel_dim=ENC_KERNEL_DIM, upsample=True)
