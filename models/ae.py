@@ -121,10 +121,9 @@ class AutoEncoder(nn.Module):
         self.latent_proj = nn.Conv3d(256, 4, kernel_size=1)
 
         # ---- decoder ----
-        self.dec2 = DecoderBlock(256, 128, use_depth=True, enc_kernel_dim=ENC_KERNEL_DIM, upsample=True)
-        self.dec1 = DecoderBlock(128, 64, use_depth=False, enc_kernel_dim=None, upsample=True)
-        self.dec0 = DecoderBlock(64, 32, use_depth=False, enc_kernel_dim=None, upsample=False)
-
+        self.dec2 = DecoderBlock(256, 128, upsample=True)
+        self.dec1 = DecoderBlock(128, 64, upsample=True)
+        self.dec0 = DecoderBlock(64, 32, upsample=False)
         self.out = OutputRefinementHead(32, out_ch=1)
 
     def encode(self, x):
@@ -148,7 +147,7 @@ class AutoEncoder(nn.Module):
     
         return x, w_E2
 
-    def decode(self, z, w_E2=None, mode="baseline"):
+    def decode(self, z, w_E2=None):
         """
         mode:
             "baseline" → no conditioning
@@ -156,46 +155,29 @@ class AutoEncoder(nn.Module):
             "film"     → FiLM conditioning
         """
     
-        # -------------------------
-        # Stage 1
-        # -------------------------
-        if mode == "we2" and w_E2 is not None:
-            z = self.dec2(z, encoder_kernel_skip=w_E2)
-        else:
-            z = self.dec2(z, encoder_kernel_skip=None)
-    
-        # -------------------------
-        # FiLM injection
-        # -------------------------
-        if mode == "film" and w_E2 is not None:
-            z = self.we2_film(z, w_E2)
-    
-        # -------------------------
-        # Remaining decoder
-        # -------------------------
+        z = self.dec2(z, w_E2)   # ONLY place w_E2 matters
+
         z = self.dec1(z)
         z = self.dec0(z)
-    
+
         return self.out(z)
     
     def forward(self, x, mode="baseline"):
-        """
-        mode:
-            "baseline" → no conditioning
-            "we2"      → kernel bias conditioning
-            "film"     → FiLM conditioning
-        """
-    
-        z, w = self.encode(x)
-    
-        if mode == "baseline":
-            return self.decode(z, None, mode="baseline")
-    
-        elif mode == "we2":
-            return self.decode(z, w, mode="we2")
-    
-        elif mode == "film":
-            return self.decode(z, w, mode="film")
-    
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
+
+      z, w = self.encode(x)
+
+      if mode == "baseline":
+          return self.decode(z, None)
+
+      elif mode == "we2":
+          return self.decode(z, w)
+
+      elif mode == "film":
+          z = self.dec2(z, w)
+          z = self.we2_film(z, w)
+          z = self.dec1(z)
+          z = self.dec0(z)
+          return self.out(z)
+
+      else:
+          raise ValueError(f"Unknown mode: {mode}")
