@@ -13,7 +13,7 @@ class SpatialKernelMixer(nn.Module):
     def forward(self, feats, w, return_weights=False):
 
         w = F.interpolate(w, size=feats[0].shape[2:], mode="trilinear", align_corners=False)
-    
+        
         weights = F.softmax(w * 5.0, dim=1)
     
         y = 0
@@ -51,9 +51,9 @@ class SmoothedSpatialKernelMixer(SpatialKernelMixer):
         # 🔥 safer normalization
         std = torch.clamp(w.std(dim=1, keepdim=True), min=1e-3)
         w = w / std
-
+        w = w + 0.01 * torch.randn_like(w)
         # 🔥 softmax with temperature
-        weights = F.softmax(w / 0.5, dim=1)
+        weights = F.softmax(w / 1.5, dim=1)
 
         # 🔥 mixing
         y = 0
