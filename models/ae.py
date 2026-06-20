@@ -113,7 +113,7 @@ class AutoEncoder(nn.Module):
         
         self.down1 = SpatialDownsample3D()  # 🔥 removed
 
-        self.enc2 = AnisotropicSwinBlock(64, 128, depth_kernels=(3,5), use_attention=False)
+        self.enc2 = AnisotropicSwinBlock(64, 128, depth_kernels=(3,5), use_attention=True)
         
         self.enc3 = AnisotropicSwinBlock(128, 256, depth_kernels=(3,), use_attention=False)
 
@@ -146,38 +146,41 @@ class AutoEncoder(nn.Module):
        
     
         return x, w_E2
-
-    def decode(self, z, w_E2=None):
-        """
-        mode:
-            "baseline" → no conditioning
-            "we2"      → kernel bias conditioning
-            "film"     → FiLM conditioning
-        """
     
-        z = self.dec2(z, w_E2)   # ONLY place w_E2 matters
+    def decode(self, z, w_E2=None, return_weights=False):
 
+        if w_E2 is not None:
+            z, weights = self.dec2(z, w_E2, return_weights=True)
+        else:
+            z = self.dec2(z, None)
+            weights = None
+    
         z = self.dec1(z)
         z = self.dec0(z)
-
-        return self.out(z)
     
-    def forward(self, x, mode="baseline"):
+        out = self.out(z)
+    
+        if return_weights:
+            return out, weights
+    
+        return out
+    
+    def forward(self, x, mode="baseline", return_weights=False):
 
-      z, w = self.encode(x)
+        z, w = self.encode(x)
+    
+        if mode == "baseline":
+            return self.decode(z, None)
+    
+        elif mode == "we2":
+            return self.decode(z, w, return_weights=return_weights)
+    
+        elif mode == "film":
+            z = self.dec2(z, w)
+            z = self.we2_film(z, w)
+            z = self.dec1(z)
+            z = self.dec0(z)
+            return self.out(z)
 
-      if mode == "baseline":
-          return self.decode(z, None)
-
-      elif mode == "we2":
-          return self.decode(z, w)
-
-      elif mode == "film":
-          z = self.dec2(z, w)
-          z = self.we2_film(z, w)
-          z = self.dec1(z)
-          z = self.dec0(z)
-          return self.out(z)
-
-      else:
+        else:
           raise ValueError(f"Unknown mode: {mode}")
