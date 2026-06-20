@@ -4,7 +4,51 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 
+class SpatialKernelMixer(nn.Module):
+    def __init__(self):
+        super().__init__()
 
+    def forward(self, feats, w):
+        """
+        feats: list of K tensors [B, C, D, H, W]
+        w:     [B, K, D, H, W]
+        """
+
+        K = len(feats)
+
+        # -----------------------------
+        # Resize weights
+        # -----------------------------
+        w = F.interpolate(
+            w,
+            size=feats[0].shape[2:],
+            mode="trilinear",
+            align_corners=False
+        )
+
+        # -----------------------------
+        # Match kernel count
+        # -----------------------------
+        if w.shape[1] != K:
+            K_min = min(K, w.shape[1])
+            feats = feats[:K_min]
+            w = w[:, :K_min]
+            K = K_min
+
+        # -----------------------------
+        # Normalize across kernels
+        # -----------------------------
+        w = w / (w.std(dim=1, keepdim=True) + 1e-6)
+        weights = F.softmax(w, dim=1)   # [B,K,D,H,W]
+
+        # -----------------------------
+        # Spatial mixing
+        # -----------------------------
+        y = 0
+        for i, f in enumerate(feats):
+            y = y + weights[:, i:i+1] * f
+
+        return y
 # --------------------------------------------------
 # Spatial upsampling (H, W only)
 # --------------------------------------------------
