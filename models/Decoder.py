@@ -4,21 +4,13 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 
-class SpatialKernelMixer(nn.Module):
-    def __init__(self):
+class SmoothedSpatialKernelMixer(SpatialKernelMixer):
+    def __init__(self, smooth=True):
         super().__init__()
+        self.smooth = smooth
 
     def forward(self, feats, w):
-        """
-        feats: list of K tensors [B, C, D, H, W]
-        w:     [B, K, D, H, W]
-        """
 
-        K = len(feats)
-
-        # -----------------------------
-        # Resize weights
-        # -----------------------------
         w = F.interpolate(
             w,
             size=feats[0].shape[2:],
@@ -26,24 +18,14 @@ class SpatialKernelMixer(nn.Module):
             align_corners=False
         )
 
-        # -----------------------------
-        # Match kernel count
-        # -----------------------------
-        if w.shape[1] != K:
-            K_min = min(K, w.shape[1])
-            feats = feats[:K_min]
-            w = w[:, :K_min]
-            K = K_min
+        # 🔥 spatial smoothing (patch prior)
+        if self.smooth:
+            w = F.avg_pool3d(w, kernel_size=(1,3,3), stride=1, padding=(0,1,1))
 
-        # -----------------------------
-        # Normalize across kernels
-        # -----------------------------
+        # normalize
         w = w / (w.std(dim=1, keepdim=True) + 1e-6)
-        weights = F.softmax(w, dim=1)   # [B,K,D,H,W]
+        weights = F.softmax(w, dim=1)
 
-        # -----------------------------
-        # Spatial mixing
-        # -----------------------------
         y = 0
         for i, f in enumerate(feats):
             y = y + weights[:, i:i+1] * f
@@ -148,91 +130,34 @@ class DecoderConvSuite(nn.Module):
 # --------------------------------------------------
 
 class DecoderBlock(nn.Module):
-    """
-    One decoder stage:
-    - spatial upsampling (H, W only)
-    - anisotropic reconstruction convs
-    - kernel mixing (optionally biased by encoder intent)
-    """
-
-    def __init__(self, in_ch, out_ch, use_depth=True, enc_kernel_dim=None, upsample=True):
+    def __init__(self, in_ch, out_ch, upsample=True):
         super().__init__()
 
         self.upsample_enabled = upsample
         self.upsample = SpatialUpsample3D(scale_factor=2)
-        
-        self.conv_suite = DecoderConvSuite(
-            in_ch=in_ch,
-            out_ch=out_ch,
-            use_depth=use_depth
-        )
-        #self.conv_suite.num_paths = 4 + (1 if use_depth else 0)
-        self.num_dec_kernels = self.conv_suite.num_paths
 
-        # Decoder-side kernel logits (learned)
-        self.logits = nn.Parameter(torch.zeros(self.num_dec_kernels))
+        self.conv_suite = DecoderConvSuite(in_ch, out_ch)
 
-        # 🔑 Learned projection: encoder intent → decoder kernel space
-        if enc_kernel_dim is not None:
-            self.enc_to_dec = nn.Linear(enc_kernel_dim, self.num_dec_kernels)
-        else:
-            self.enc_to_dec = None
+        # 🔥 plug-in mixer
+        self.mixer = SmoothedSpatialKernelMixer()
 
         self.norm = nn.GroupNorm(8, out_ch)
         self.act = nn.SiLU()
 
-    def forward(self, x, encoder_kernel_skip=None, bias_strength=0.01):
+    def forward(self, x, w_E2=None):
 
         if self.upsample_enabled:
             x = self.upsample(x)
-    
+
         feats = self.conv_suite(x)
-    
-        # -----------------------------
-        # 🔥 BASELINE weights (learned)
-        # -----------------------------
-        weights = torch.softmax(self.logits, dim=0)   # [K]
-    
-        # -----------------------------
-        # 🔥 OPTIONAL w_E2 bias (SAFE)
-        # -----------------------------
-        if encoder_kernel_skip is not None:
-            w = encoder_kernel_skip
-    
-            # resize to match
-            w = F.interpolate(
-                w,
-                size=x.shape[2:],
-                mode="trilinear",
-                align_corners=False
-            )
-    
-            # normalize (critical)
-            w = w / (w.std(dim=(2,3,4), keepdim=True) + 1e-6)
-    
-            # reduce spatial → global signal
-            w_global = w.mean(dim=(2,3,4))   # [B, K]
-    
-            # average across batch → stable
-            w_global = w_global.mean(dim=0)  # [K]
-    
-            # convert to soft bias
-            w_bias = torch.softmax(w_global, dim=0)
-            # print(w_bias.shape)
-            # print(weights.shape)
-    
-            # 🔥 blend with learned weights (VERY WEAK)
-            weights = (1 - bias_strength) * weights + bias_strength * w_bias
-    
-        # -----------------------------
-        # 🔥 feature mixing
-        # -----------------------------
-        y = 0
-        for i, f in enumerate(feats):
-            y = y + weights[i] * f
-    
+
+        if w_E2 is not None:
+            y = self.mixer(feats, w_E2)
+        else:
+            # fallback → uniform mixing
+            y = sum(feats) / len(feats)
+
         y = self.act(self.norm(y))
-    
         return y
         
         # y = self.heavy(x, encoder_kernel_skip)
