@@ -4,13 +4,23 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 
-class SmoothedSpatialKernelMixer(SpatialKernelMixer):
-    def __init__(self, smooth=True):
+
+
+class SpatialKernelMixer(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.smooth = smooth
 
     def forward(self, feats, w):
+        """
+        feats: list of K tensors [B, C, D, H, W]
+        w:     [B, K, D, H, W]
+        """
 
+        K = len(feats)
+
+        # -----------------------------
+        # Resize weights
+        # -----------------------------
         w = F.interpolate(
             w,
             size=feats[0].shape[2:],
@@ -18,14 +28,54 @@ class SmoothedSpatialKernelMixer(SpatialKernelMixer):
             align_corners=False
         )
 
-        # 🔥 spatial smoothing (patch prior)
-        if self.smooth:
-            w = F.avg_pool3d(w, kernel_size=(1,3,3), stride=1, padding=(0,1,1))
+        # -----------------------------
+        # Match kernel count
+        # -----------------------------
+        if w.shape[1] != K:
+            K_min = min(K, w.shape[1])
+            feats = feats[:K_min]
+            w = w[:, :K_min]
+            K = K_min
 
-        # normalize
+        # -----------------------------
+        # Normalize across kernels
+        # -----------------------------
         w = w / (w.std(dim=1, keepdim=True) + 1e-6)
-        weights = F.softmax(w, dim=1)
+        weights = F.softmax(w, dim=1)   # [B,K,D,H,W]
 
+        # -----------------------------
+        # Spatial mixing
+        # -----------------------------
+        y = 0
+        for i, f in enumerate(feats):
+            y = y + weights[:, i:i+1] * f
+
+        return y
+    
+class SmoothedSpatialKernelMixer(SpatialKernelMixer):
+    def __init__(self, smooth=True):
+        super().__init__()
+        self.smooth = smooth
+
+    def forward(self, feats, w):
+
+        w = F.interpolate(w, size=feats[0].shape[2:], mode="trilinear", align_corners=False)
+
+        w = w.float().contiguous()
+
+        # 🔥 spatial smoothing
+        w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
+
+        # 🔥 competition
+        w = w - w.mean(dim=1, keepdim=True)
+
+        # 🔥 normalization
+        w = w / (w.std(dim=1, keepdim=True) + 1e-6)
+
+        # 🔥 softmax with temperature
+        weights = F.softmax(w / 0.5, dim=1)
+
+        # 🔥 mixing
         y = 0
         for i, f in enumerate(feats):
             y = y + weights[:, i:i+1] * f
@@ -145,7 +195,7 @@ class DecoderBlock(nn.Module):
         self.act = nn.SiLU()
 
     def forward(self, x, w_E2=None):
-
+        x = x.float()
         if self.upsample_enabled:
             x = self.upsample(x)
 
