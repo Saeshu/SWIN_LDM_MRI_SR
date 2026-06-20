@@ -83,9 +83,9 @@ class KernelMixingAttention(nn.Module):
     def forward(self, tokens):
         attn_out, _ = self.attn(tokens, tokens, tokens)
         logits = self.proj(attn_out)
-        weights = F.softmax(logits, dim=-1)
+        # weights = F.softmax(logits, dim=-1)
         
-        return weights  # [B, N, K]
+        return logits  # [B, N, K]
 
    
 class AnisotropicSwinBlock(nn.Module):
@@ -112,7 +112,7 @@ class AnisotropicSwinBlock(nn.Module):
         if use_attention:
             self.window_pool = WindowPool3D(window_size)
             self.attn = KernelMixingAttention(
-                embed_dim=in_ch,
+                embed_dim=reduced_ch,
                 num_kernels=self.num_kernels
             )
         else:
