@@ -38,7 +38,7 @@ class AnisotropicConvSuite(nn.Module):
 
 
 class WindowPool3D(nn.Module):
-    def __init__(self, window_size=(1, 21, 21)):
+    def __init__(self, window_size=(1, 11, 11)):
         super().__init__()
         self.window_size = window_size
         
@@ -133,9 +133,21 @@ class AnisotropicSwinBlock(nn.Module):
     
         if self.use_attention:
             tokens = self.window_pool(x_small) # [B, N, C]
-    
+            pos = torch.linspace(-1, 1, tokens.shape[1], device=tokens.device)
+            pos = pos.unsqueeze(0).unsqueeze(-1)
+            
+            tokens = tokens + 0.1 * pos
             weights = self.attn(tokens)  # [B, N, K]
-    
+
+
+            w_local = x_small.mean(dim=1, keepdim=True)   # [B,1,D_s,H_s,W_s]
+
+            # flatten to token space
+            w_local = w_local.view(B, 1, -1).permute(0, 2, 1)  # [B, N, 1]
+            
+            # broadcast to match kernels
+            w_local = w_local.expand(-1, -1, logits.shape[-1])  # [B, N, K]
+
             wd, wh, ww = self.window_pool._last_window
     
             Nd = D_s // wd
