@@ -36,9 +36,7 @@ class WE2FiLM(nn.Module):
         # -----------------------------
         # Normalize (VERY IMPORTANT)
         # -----------------------------
-        std = w.std(dim=(2,3,4), keepdim=True)
-        std = torch.clamp(std, min=1e-3)
-        w = w / std
+        
 
         # -----------------------------
         # Lazy init
@@ -77,14 +75,36 @@ class WE2FiLM(nn.Module):
         # -----------------------------
         # 🔥 FiLM (WEAK)
         # -----------------------------
-        h = h * (1 + 0.01 * scale) + 0.01 * shift
+        # -----------------------------
+        # Normalize
+        # -----------------------------
+        std = torch.clamp(w.std(dim=(2,3,4), keepdim=True), min=1e-3)
+        w = w / std
+        
+        # -----------------------------
+        # Threshold (detached)
+        # -----------------------------
+        thr = (w.abs().mean() + 0.5 * w.abs().std()).detach()
+        
+        # -----------------------------
+        # Mask
+        # -----------------------------
+        mask = torch.sigmoid(20 * ((w.abs() - thr) / (w.abs().std() + 1e-6)))
+        
+        # 🔥 collapse kernel dimension
+        mask = mask.mean(dim=1, keepdim=True)   # [B,1,D,H,W]
+        
+        # -----------------------------
+        # FiLM (WEAK + MASKED)
+        # -----------------------------
+        h = h * (1 + 0.001 * mask * scale) + 0.001 * mask * shift
 
         return h
         
 class AutoEncoder(nn.Module):
     def __init__(self):
         super().__init__()
-        self.we2 = WE2FiLM()
+        self.we2_film = WE2FiLM()
         # ---- encoder ----
         self.enc0 = AnisotropicSwinBlock(1, 32, depth_kernels=(), use_attention=False)
         self.down0 = SpatialDownsample3D()
