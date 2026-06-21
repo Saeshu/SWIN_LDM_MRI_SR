@@ -42,8 +42,8 @@ class SmoothedSpatialKernelMixer(SpatialKernelMixer):
         w = w.float().contiguous()
 
         # 🔥 spatial smoothing
-        if self.smooth:
-            w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
+        # if self.smooth:
+        #     w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
 
         # 🔥 competition
         w = w - w.mean(dim=1, keepdim=True)
