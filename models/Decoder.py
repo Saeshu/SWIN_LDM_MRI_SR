@@ -50,8 +50,9 @@ class SmoothedSpatialKernelMixer(SpatialKernelMixer):
 
         # 🔥 safer normalization
         std = torch.clamp(w.std(dim=1, keepdim=True), min=1e-3)
-        w = w / std
+        
         w = w + 0.01 * torch.randn_like(w)
+        w = w / std
         # 🔥 softmax with temperature
         weights = F.softmax(w / 1.5, dim=1)
 
