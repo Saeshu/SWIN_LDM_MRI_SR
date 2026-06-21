@@ -152,12 +152,16 @@ class AnisotropicSwinBlock(nn.Module):
             # -----------------------------
             # 🔥 Spatial residual (CRITICAL)
             # -----------------------------
-            w_local = x_small.mean(dim=1, keepdim=True)  # [B,1,D_s,H_s,W_s]
-    
-            w_local = w_local.view(B, 1, -1).permute(0, 2, 1)  # [B, N, 1]
-            w_local = w_local.expand(-1, -1, logits.shape[-1])  # [B, N, K]
-    
-            logits = logits + 0.3 * w_local   # 🔥 THIS LINE WAS MISSING
+            w_local_tokens = self.window_pool(x_small)   # [B, N, C]
+
+            # collapse channel → scalar per token
+            w_local_tokens = w_local_tokens.mean(dim=-1, keepdim=True)  # [B, N, 1]
+            
+            # expand to match kernels
+            w_local_tokens = w_local_tokens.expand(-1, -1, logits.shape[-1])  # [B, N, K]
+            
+            # inject
+            logits = logits + 0.3 * w_local_tokens
     
             # -----------------------------
             # Reshape → spatial map
