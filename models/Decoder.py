@@ -183,7 +183,7 @@ class DecoderBlock(nn.Module):
             x = self.upsample(x)
     
         feats = self.conv_suite(x)
-    
+        print("decoder K:", len(feats))
         if w_E2 is not None:
             y, weights = self.mixer(feats, w_E2, return_weights=True)
         else:
