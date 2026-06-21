@@ -142,7 +142,7 @@ class AnisotropicSwinBlock(nn.Module):
             # positional bias
             pos = torch.linspace(-1, 1, tokens.shape[1], device=tokens.device)
             pos = pos.unsqueeze(0).unsqueeze(-1)
-            tokens = tokens + 0.1 * pos
+            tokens = tokens + 0.2 * pos
     
             # -----------------------------
             # Attention → logits
