@@ -194,8 +194,8 @@ class AnisotropicSwinBlock(nn.Module):
         # -----------------------------
         # Mixing
         # -----------------------------
-        y = sum(weights[:, i:i+1] * f for i, f in enumerate(feats))
-    
+       # just aggregate features normally (no kernel mixing here)
+        y = sum(feats) / len(feats)
         y = self.act(self.norm(y))
     
         if return_weights:
