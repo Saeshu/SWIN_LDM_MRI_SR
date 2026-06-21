@@ -123,7 +123,8 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-    
+        print("encoder K:", w_E2.shape[1])
+
         x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
         x_small = self.reduce(x_small)
     
@@ -141,7 +142,7 @@ class AnisotropicSwinBlock(nn.Module):
             # positional bias
             pos = torch.linspace(-1, 1, tokens.shape[1], device=tokens.device)
             pos = pos.unsqueeze(0).unsqueeze(-1)
-            tokens = tokens + 0.3 * pos
+            tokens = tokens + 0.1 * pos
     
             # -----------------------------
             # Attention → logits
@@ -156,7 +157,7 @@ class AnisotropicSwinBlock(nn.Module):
             w_local = w_local.view(B, 1, -1).permute(0, 2, 1)  # [B, N, 1]
             w_local = w_local.expand(-1, -1, logits.shape[-1])  # [B, N, K]
     
-            logits = logits + 0.1 * w_local   # 🔥 THIS LINE WAS MISSING
+            logits = logits + 0.3 * w_local   # 🔥 THIS LINE WAS MISSING
     
             # -----------------------------
             # Reshape → spatial map
