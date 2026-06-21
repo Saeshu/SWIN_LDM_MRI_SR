@@ -123,60 +123,72 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
+    
         x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
-
         x_small = self.reduce(x_small)
-
+    
         B, C_s, D_s, H_s, W_s = x_small.shape
     
         feats = self.conv_suite(x)
     
         if self.use_attention:
-            tokens = self.window_pool(x_small) # [B, N, C]
+    
+            # -----------------------------
+            # Tokenization
+            # -----------------------------
+            tokens = self.window_pool(x_small)  # [B, N, C]
+    
+            # positional bias
             pos = torch.linspace(-1, 1, tokens.shape[1], device=tokens.device)
             pos = pos.unsqueeze(0).unsqueeze(-1)
-            
             tokens = tokens + 0.1 * pos
-            weights = self.attn(tokens)  # [B, N, K]
-
-
-            w_local = x_small.mean(dim=1, keepdim=True)   # [B,1,D_s,H_s,W_s]
-
-            # flatten to token space
+    
+            # -----------------------------
+            # Attention → logits
+            # -----------------------------
+            logits = self.attn(tokens)  # [B, N, K]
+    
+            # -----------------------------
+            # 🔥 Spatial residual (CRITICAL)
+            # -----------------------------
+            w_local = x_small.mean(dim=1, keepdim=True)  # [B,1,D_s,H_s,W_s]
+    
             w_local = w_local.view(B, 1, -1).permute(0, 2, 1)  # [B, N, 1]
-            
-            # broadcast to match kernels
             w_local = w_local.expand(-1, -1, logits.shape[-1])  # [B, N, K]
-
+    
+            logits = logits + 0.1 * w_local   # 🔥 THIS LINE WAS MISSING
+    
+            # -----------------------------
+            # Reshape → spatial map
+            # -----------------------------
             wd, wh, ww = self.window_pool._last_window
     
             Nd = D_s // wd
             Nh = H_s // wh
             Nw = W_s // ww
     
-            assert tokens.shape[1] == Nd * Nh * Nw, \
-                f"Token mismatch: {tokens.shape[1]} vs {Nd*Nh*Nw}"
-            assert wd > 0 and wh > 0 and ww > 0, "Invalid window size"
-            assert D_s >= wd and H_s >= wh and W_s >= ww, "Window larger than input"
-            weights = weights.reshape(B, Nd, Nh, Nw, self.num_kernels)
+            assert tokens.shape[1] == Nd * Nh * Nw
     
-            weights = weights.permute(0, 4, 1, 2, 3)  # [B, K, Nd, Nh, Nw]
+            logits = logits.reshape(B, Nd, Nh, Nw, self.num_kernels)
+            logits = logits.permute(0, 4, 1, 2, 3)  # [B, K, Nd, Nh, Nw]
     
-            weights = F.interpolate(
-                weights,
+            logits = F.interpolate(
+                logits,
                 size=(D, H, W),
                 mode="trilinear",
                 align_corners=False
             )
     
-            # 🔥 re-normalize
-            weights = F.softmax(weights, dim=1)
+            weights = logits   # 🔥 IMPORTANT: still logits (no softmax)
     
         else:
             weights = F.softmax(self.alpha, dim=0)
             weights = weights.view(1, self.num_kernels, 1, 1, 1)
             weights = weights.expand(B, -1, D, H, W)
     
+        # -----------------------------
+        # Mixing
+        # -----------------------------
         y = sum(weights[:, i:i+1] * f for i, f in enumerate(feats))
     
         y = self.act(self.norm(y))
@@ -185,8 +197,8 @@ class AnisotropicSwinBlock(nn.Module):
             return y, weights
     
         return y
-
-        
+    
+            
 
 class SpatialDownsample3D(nn.Module):
     def __init__(self):
