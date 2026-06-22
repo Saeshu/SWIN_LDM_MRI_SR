@@ -5,6 +5,77 @@ from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 
 
+
+class SpatialKernelMixer(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, feats, w, return_weights=False):
+
+        w = F.interpolate(w, size=feats[0].shape[2:], mode="trilinear", align_corners=False)
+        
+        weights = F.softmax(w * 5.0, dim=1)
+        # print("w shape:", w.shape)
+        # print("num feats:", len(feats))
+        # print("feat shape:", feats[0].shape)
+        y = torch.zeros_like(feats[0])
+        for i, f in enumerate(feats):
+            y = y + weights[:, i:i+1] * f
+    
+        if return_weights:
+            return y, weights
+    
+        return y
+    
+class SmoothedSpatialKernelMixer(SpatialKernelMixer):
+    def __init__(self, smooth=True):
+        super().__init__()
+        self.smooth = smooth
+
+    def forward(self, feats, w, return_weights=False):
+        assert all(f.shape[1] == feats[0].shape[1] for f in feats), \
+        "All kernel outputs must have same channel dim"
+        w = F.interpolate(
+            w,
+            size=feats[0].shape[2:],
+            mode="trilinear",
+            align_corners=False
+        )
+
+        w = w.float().contiguous()
+
+        # 🔥 spatial smoothing
+        # if self.smooth:
+        #     w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
+        # w = F.avg_pool3d(w, kernel_size=(1,3,3), stride=1, padding=(0,1,1))
+        w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1)) * 0.5 + w * 0.5
+        
+        # 🔥 competition
+        w = w - 0.5 * w.mean(dim=1, keepdim=True)
+
+        # 🔥 safer normalization
+        std = torch.clamp(w.std(dim=1, keepdim=True), min=1e-3)
+        w = w / std
+        w = w + 0.01 * torch.randn_like(w)
+        
+        w = torch.clamp(w, -3.0, 3.0)
+        
+        # 🔥 softmax with temperature
+        temp = 2.0
+        weights = F.softmax(w / temp, dim=1)
+
+        # 🔥 mixing
+        # print("weights shape:", weights.shape)
+        # print("num feats:", len(feats))
+        # print("feat shape:", feats[0].shape)
+        y = torch.zeros_like(feats[0])
+        for i, f in enumerate(feats):
+            y = y + weights[:, i:i+1] * f
+
+        if return_weights:
+            return y, weights
+
+        return y
 # --------------------------------------------------
 # Spatial upsampling (H, W only)
 # --------------------------------------------------
@@ -51,143 +122,68 @@ class SpatialUpsample3D(nn.Module):
 # --------------------------------------------------
 
 class DecoderConvSuite(nn.Module):
-    """
-    Anisotropic convolution suite for reconstruction.
-    Spatial kernels dominate.
-    """
-
-    def __init__(self, in_ch, out_ch, use_depth=True):
+    def __init__(self, in_ch, out_ch):
         super().__init__()
 
-        # Spatial refinement
-        self.conv_3x3x1 = nn.Conv3d(
-            in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
-        )
-        self.conv_1x3x1 = nn.Conv3d(
-            in_ch, out_ch, kernel_size=(1, 3, 1), padding=(0, 1, 0)
-        )
-        self.conv_3x1x1 = nn.Conv3d(
-            in_ch, out_ch, kernel_size=(1, 1, 3), padding=(0, 0, 1)
-        )
+        self.conv_low = nn.Conv3d(in_ch, out_ch, 1)
+        self.conv_high = nn.Conv3d(in_ch, out_ch, 1)
 
-        self.use_depth = use_depth
+        self.conv_3x3x1 = nn.Conv3d(in_ch, out_ch, (1,3,3), padding=(0,1,1))
+        self.conv_identity = nn.Conv3d(in_ch, out_ch, 1)
+        self.conv_depth = nn.Conv3d(in_ch, out_ch, (3,1,1), padding=(1,0,0))
 
-        if use_depth:
-            # Short-range depth regularization only
-            self.conv_1x1x3 = nn.Conv3d(
-                in_ch, out_ch, kernel_size=(3, 1, 1), padding=(1, 0, 0)
-            )
-
-        # Channel mixer
-        self.conv_1x1x1 = nn.Conv3d(in_ch, out_ch, kernel_size=1)
-
-        self.num_paths = 4
+        self.num_paths = 5
 
     def forward(self, x):
+        low = F.avg_pool3d(x, (1,3,3), stride=1, padding=(0,1,1))
+        high = x - low
+
         feats = [
+            self.conv_low(low),        # ✅ now out_ch
+            self.conv_high(high),      # ✅ now out_ch
             self.conv_3x3x1(x),
-            self.conv_1x3x1(x),
-            self.conv_3x1x1(x),
-            self.conv_1x1x1(x)
+            self.conv_identity(x),
+            self.conv_depth(x),
         ]
 
-        # if self.use_depth:
-        #     feats.append(self.conv_1x1x3(x))
-
-        #feats.append(self.conv_1x1x1(x))
-
         return feats
-
-
 # --------------------------------------------------
 # Decoder block (upsample + conv suite + kernel mixing)
 # --------------------------------------------------
 
 class DecoderBlock(nn.Module):
-    """
-    One decoder stage:
-    - spatial upsampling (H, W only)
-    - anisotropic reconstruction convs
-    - kernel mixing (optionally biased by encoder intent)
-    """
-
-    def __init__(self, in_ch, out_ch, use_depth=True, enc_kernel_dim=None, upsample=True):
+    def __init__(self, in_ch, out_ch, upsample=True):
         super().__init__()
 
         self.upsample_enabled = upsample
         self.upsample = SpatialUpsample3D(scale_factor=2)
-        
-        self.conv_suite = DecoderConvSuite(
-            in_ch=in_ch,
-            out_ch=out_ch,
-            use_depth=use_depth
-        )
-        #self.conv_suite.num_paths = 4 + (1 if use_depth else 0)
-        self.num_dec_kernels = self.conv_suite.num_paths
 
-        # Decoder-side kernel logits (learned)
-        self.logits = nn.Parameter(torch.zeros(self.num_dec_kernels))
+        self.conv_suite = DecoderConvSuite(in_ch, out_ch)
 
-        # 🔑 Learned projection: encoder intent → decoder kernel space
-        if enc_kernel_dim is not None:
-            self.enc_to_dec = nn.Linear(enc_kernel_dim, self.num_dec_kernels)
-        else:
-            self.enc_to_dec = None
+        # 🔥 plug-in mixer
+        self.mixer = SmoothedSpatialKernelMixer()
 
         self.norm = nn.GroupNorm(8, out_ch)
         self.act = nn.SiLU()
 
-    def forward(self, x, encoder_kernel_skip=None, bias_strength=0.01):
+    def forward(self, x, w_E2=None, return_weights=False):
 
         if self.upsample_enabled:
             x = self.upsample(x)
     
         feats = self.conv_suite(x)
-    
-        # -----------------------------
-        # 🔥 BASELINE weights (learned)
-        # -----------------------------
-        weights = torch.softmax(self.logits, dim=0)   # [K]
-    
-        # -----------------------------
-        # 🔥 OPTIONAL w_E2 bias (SAFE)
-        # -----------------------------
-        if encoder_kernel_skip is not None:
-            w = encoder_kernel_skip
-    
-            # resize to match
-            w = F.interpolate(
-                w,
-                size=x.shape[2:],
-                mode="trilinear",
-                align_corners=False
-            )
-    
-            # normalize (critical)
-            w = w / (w.std(dim=(2,3,4), keepdim=True) + 1e-6)
-    
-            # reduce spatial → global signal
-            w_global = w.mean(dim=(2,3,4))   # [B, K]
-    
-            # average across batch → stable
-            w_global = w_global.mean(dim=0)  # [K]
-    
-            # convert to soft bias
-            w_bias = torch.softmax(w_global, dim=0)
-            # print(w_bias.shape)
-            # print(weights.shape)
-    
-            # 🔥 blend with learned weights (VERY WEAK)
-            weights = (1 - bias_strength) * weights + bias_strength * w_bias
-    
-        # -----------------------------
-        # 🔥 feature mixing
-        # -----------------------------
-        y = 0
-        for i, f in enumerate(feats):
-            y = y + weights[i] * f
+        # print("decoder K:", len(feats))
+        # print("input x:", x.shape)
+        if w_E2 is not None:
+            y, weights = self.mixer(feats, w_E2, return_weights=True)
+        else:
+            y = sum(feats) / len(feats)
+            weights = None
     
         y = self.act(self.norm(y))
+    
+        if return_weights:
+            return y, weights
     
         return y
         
@@ -249,7 +245,7 @@ class DecoderBlock(nn.Module):
     
         for i, f in enumerate(feats):
             # weights = encoder_kernel_skip
-            assert weights.shape[1] > i, f"weight mismatch at {i}"
+            # assert weights.shape[1] > i, f"weight mismatch at {i}"
             y = y + weights[:, i:i+1] * f
     
         #print("RETURNING y:", y.shape)
