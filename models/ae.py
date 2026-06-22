@@ -112,9 +112,9 @@ class AutoEncoder(nn.Module):
         self.enc1 = AnisotropicSwinBlock(32, 64, use_attention=False)
         self.down1 = SpatialDownsample3D()
         
-        self.enc2 = AnisotropicSwinBlock(64, 128, use_attention=True, shift=False)
+        self.enc2 = AnisotropicSwinBlock(64, 128, use_attention=True, shift=True)
         
-        self.enc3 = AnisotropicSwinBlock(128, 256, use_attention=True, shift = True)
+        self.enc3 = AnisotropicSwinBlock(128, 256, use_attention=False, shift = False)
 
         # 🔥 NEW: projection instead of mean
         self.latent_proj = nn.Conv3d(256, 4, kernel_size=1)
