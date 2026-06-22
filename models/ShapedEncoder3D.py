@@ -42,19 +42,20 @@ def shifted_pad(x, shift_d, shift_h, shift_w):
     return x
     
 class WindowPool3D(nn.Module):
-    def __init__(self, window_size=(1, 11, 11)):
+    def __init__(self, window_size=(1, 11, 11), shift=False):
         super().__init__()
         self.window_size = window_size
         self.shift = shift
         
-    def forward(self, x, shift=False):
+    def forward(self, x):
         B, C, D, H, W = x.shape
         wd, wh, ww = self.window_size
+
+        # 🔥 SHIFT (correct)
         if self.shift:
             shift_d = wd // 2
             shift_h = wh // 2
             shift_w = ww // 2
-        
             x = shifted_pad(x, shift_d, shift_h, shift_w)
         # Clamp window size
         wd = min(wd, D)
@@ -123,7 +124,7 @@ class AnisotropicSwinBlock(nn.Module):
         out_ch,
         window_size=(1, 11, 11),
         use_attention=True
-        
+        shift=False
     ):
         super().__init__()
         if use_attention:
@@ -140,7 +141,7 @@ class AnisotropicSwinBlock(nn.Module):
         self.window_size = window_size
         
         if use_attention:
-            self.window_pool = WindowPool3D(window_size)
+            self.window_pool = WindowPool3D(window_size, shift=True)
             self.attn = KernelMixingAttention(
                 embed_dim=reduced_ch,
                 num_kernels=self.num_kernels
