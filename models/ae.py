@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .ShapedEncoder3D import AnisotropicSwinBlock, SpatialDownsample3D
 from .Decoder import DecoderBlock, OutputRefinementHead
-ENC_KERNEL_DIM = 4
+ENC_KERNEL_DIM = 5
 class WE2FiLM(nn.Module):
     def __init__(self, hidden_ch=64):
         super().__init__()
@@ -106,16 +106,15 @@ class AutoEncoder(nn.Module):
         super().__init__()
         self.we2_film = WE2FiLM()
         # ---- encoder ----
-        self.enc0 = AnisotropicSwinBlock(1, 32, depth_kernels=(), use_attention=False)
+        self.enc0 = AnisotropicSwinBlock(1, 32, use_attention=False)
         self.down0 = SpatialDownsample3D()
-
-        self.enc1 = AnisotropicSwinBlock(32, 64, depth_kernels=(3,), use_attention=False)
         
-        self.down1 = SpatialDownsample3D()  # 🔥 removed
-
-        self.enc2 = AnisotropicSwinBlock(64, 128, depth_kernels=(3,5), use_attention=True)
+        self.enc1 = AnisotropicSwinBlock(32, 64, use_attention=False)
+        self.down1 = SpatialDownsample3D()
         
-        self.enc3 = AnisotropicSwinBlock(128, 256, depth_kernels=(3,), use_attention=False)
+        self.enc2 = AnisotropicSwinBlock(64, 128, use_attention=True, shift=False)
+        
+        self.enc3 = AnisotropicSwinBlock(128, 256, use_attention=True, shift = True)
 
         # 🔥 NEW: projection instead of mean
         self.latent_proj = nn.Conv3d(256, 4, kernel_size=1)
@@ -165,7 +164,7 @@ class AutoEncoder(nn.Module):
     
         return out
     
-    def forward(self, x, mode="baseline", return_weights=False):
+    def forward(self, x, mode="we2", return_weights=False):
 
         z, w = self.encode(x)
     
