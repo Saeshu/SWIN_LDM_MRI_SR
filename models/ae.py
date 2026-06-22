@@ -114,7 +114,7 @@ class AutoEncoder(nn.Module):
         
         self.enc2 = AnisotropicSwinBlock(64, 128, use_attention=True, shift=False)
         
-        self.enc3 = AnisotropicSwinBlock(128, 256, use_attention=True, shift = True)
+        self.enc3 = AnisotropicSwinBlock(128, 256, use_attention=True, shift = False)
 
         # 🔥 NEW: projection instead of mean
         self.latent_proj = nn.Conv3d(256, 4, kernel_size=1)
