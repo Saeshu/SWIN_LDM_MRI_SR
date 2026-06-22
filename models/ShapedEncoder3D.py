@@ -27,16 +27,35 @@ class AnisotropicConvSuite(nn.Module):
     def forward(self, x):
         return [conv(x) for conv in self.kernels]
 
+def shifted_pad(x, shift_d, shift_h, shift_w):
+    """
+    Non-circular shift using padding (no wrap-around).
+    """
+    B, C, D, H, W = x.shape
 
+    # pad on the "front" side
+    x = F.pad(x, (shift_w, 0, shift_h, 0, shift_d, 0))
+
+    # crop back to original size
+    x = x[:, :, :D, :H, :W]
+
+    return x
+    
 class WindowPool3D(nn.Module):
     def __init__(self, window_size=(1, 11, 11)):
         super().__init__()
         self.window_size = window_size
+        self.shift = shift
         
-    def forward(self, x):
+    def forward(self, x, shift=False):
         B, C, D, H, W = x.shape
         wd, wh, ww = self.window_size
-
+        if self.shift:
+            shift_d = wd // 2
+            shift_h = wh // 2
+            shift_w = ww // 2
+        
+            x = shifted_pad(x, shift_d, shift_h, shift_w)
         # Clamp window size
         wd = min(wd, D)
         wh = min(wh, H)
@@ -104,8 +123,11 @@ class AnisotropicSwinBlock(nn.Module):
         out_ch,
         window_size=(1, 11, 11),
         use_attention=True
+        
     ):
         super().__init__()
+        if use_attention:
+            self.window_pool = WindowPool3D(window_size, shift=True)
 
         self.conv_suite = AnisotropicConvSuite(
             in_ch, out_ch
