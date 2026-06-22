@@ -139,7 +139,7 @@ class AutoEncoder(nn.Module):
             x = out
             w_E2 = None
             
-        x = self.enc3(x, return)
+        x = self.enc3(x)
     
         # 🔥 TEMP FIX: make compatible with decoder
        
