@@ -42,7 +42,7 @@ def shifted_pad(x, shift_d, shift_h, shift_w):
     return x
     
 class WindowPool3D(nn.Module):
-    def __init__(self, window_size=(1, 11, 11), shift=False):
+    def __init__(self, window_size=(1, 7, 7), shift=False):
         super().__init__()
         self.window_size = window_size
         self.shift = shift
@@ -123,12 +123,12 @@ class AnisotropicSwinBlock(nn.Module):
         in_ch,
         out_ch,
         window_size=(1, 11, 11),
-        use_attention=True
+        use_attention=True,
         shift=False
     ):
         super().__init__()
         if use_attention:
-            self.window_pool = WindowPool3D(window_size, shift=True)
+            self.window_pool = WindowPool3D(window_size, shift=False)
 
         self.conv_suite = AnisotropicConvSuite(
             in_ch, out_ch
@@ -141,7 +141,7 @@ class AnisotropicSwinBlock(nn.Module):
         self.window_size = window_size
         
         if use_attention:
-            self.window_pool = WindowPool3D(window_size, shift=True)
+            self.window_pool = WindowPool3D(window_size, shift=False)
             self.attn = KernelMixingAttention(
                 embed_dim=reduced_ch,
                 num_kernels=self.num_kernels
@@ -155,10 +155,17 @@ class AnisotropicSwinBlock(nn.Module):
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
         # print("encoder K:", w_E2.shape[1])
-
-        x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
+        # x = x.to(device)
+        
+        x_small = F.interpolate(
+        x,
+        scale_factor=(1, 0.5, 0.5),
+        mode="trilinear",
+        align_corners=False
+    )
         x_small = self.reduce(x_small)
-    
+        # print("x_small device:", x_small.device)
+        # print("reduce device:", next(self.reduce.parameters()).device)
         B, C_s, D_s, H_s, W_s = x_small.shape
     
         feats = self.conv_suite(x)
