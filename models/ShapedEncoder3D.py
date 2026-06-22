@@ -168,9 +168,20 @@ class AnisotropicSwinBlock(nn.Module):
             tokens, (Nd, Nh, Nw), (wd, wh, ww) = self.window_pool(x_small)
 
             # positional bias
-            pos = torch.linspace(-1, 1, tokens.shape[1], device=tokens.device)
-            pos = pos.unsqueeze(0).unsqueeze(-1)
-            tokens = tokens + 0.2 * pos
+            coords = torch.stack(torch.meshgrid(
+            torch.linspace(-1,1,Nd, device=tokens.device),
+            torch.linspace(-1,1,Nh, device=tokens.device),
+            torch.linspace(-1,1,Nw, device=tokens.device),
+            indexing='ij'
+        ), dim=-1)
+        
+            coords = coords.view(-1, 3)
+            
+            if coords.shape[-1] < tokens.shape[-1]:
+                coords = F.pad(coords, (0, tokens.shape[-1] - 3))
+            
+            tokens = tokens + 0.1 * coords.unsqueeze(0)
+            
             
             # -----------------------------
             # Attention → logits
