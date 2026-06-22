@@ -4,66 +4,75 @@ import torch.nn.functional as F
 
 
 class AnisotropicConvSuite(nn.Module):
-    def __init__(self, in_ch, out_ch, depth_kernels=(3, 5, 7)):
+    def __init__(self, in_ch, out_ch):
         super().__init__()
-        
-        self.conv_3x3x1 = nn.Conv3d(
-            in_ch, out_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1)
-        )
 
-        self.depth_convs = nn.ModuleList([
-            nn.Conv3d(
-                in_ch, out_ch,
-                kernel_size=(k, 1, 1),
-                padding=(k // 2, 0, 0)
-            )
-            for k in depth_kernels
+        self.kernels = nn.ModuleList([
+            # full spatial
+            nn.Conv3d(in_ch, out_ch, kernel_size=(1,3,3), padding=(0,1,1)),
+
+            # directional spatial
+            nn.Conv3d(in_ch, out_ch, kernel_size=(1,3,1), padding=(0,1,0)),  # vertical
+            nn.Conv3d(in_ch, out_ch, kernel_size=(1,1,3), padding=(0,0,1)),  # horizontal
+
+            # depth
+            nn.Conv3d(in_ch, out_ch, kernel_size=(3,1,1), padding=(1,0,0)),
+
+            # channel mixer
+            nn.Conv3d(in_ch, out_ch, kernel_size=1)
         ])
 
-        self.conv_1x1x1 = nn.Conv3d(in_ch, out_ch, kernel_size=1)
-
-        self.num_paths = 1 + len(depth_kernels) + 1
+        self.num_paths = len(self.kernels)
 
     def forward(self, x):
-        feats = []
-
-        feats.append(self.conv_3x3x1(x))
-
-        for conv in self.depth_convs:
-            feats.append(conv(x))
-
-        feats.append(self.conv_1x1x1(x))
-
-        return feats
+        return [conv(x) for conv in self.kernels]
 
 
 class WindowPool3D(nn.Module):
-    def __init__(self, window_size=(1, 21, 21)):
+    def __init__(self, window_size=(1, 11, 11)):
         super().__init__()
         self.window_size = window_size
         
     def forward(self, x):
         B, C, D, H, W = x.shape
         wd, wh, ww = self.window_size
-    
-        # 🔥 clamp properly
+
+        # Clamp window size
         wd = min(wd, D)
         wh = min(wh, H)
         ww = min(ww, W)
-    
-        # 🔥 IMPORTANT: store for reuse
-        self._last_window = (wd, wh, ww)
-    
+
+        # Ensure divisibility (IMPORTANT)
+        D_trim = (D // wd) * wd
+        H_trim = (H // wh) * wh
+        W_trim = (W // ww) * ww
+
+        x = x[:, :, :D_trim, :H_trim, :W_trim]
+
+        # Unfold into windows
         x = x.unfold(2, wd, wd) \
              .unfold(3, wh, wh) \
              .unfold(4, ww, ww)
-    
-        x = x.contiguous().view(B, C, -1, wd * wh * ww)
-    
-        tokens = x.mean(dim=-1) + 0.5 * x.std(dim=-1)
+
+        # [B, C, Nd, Nh, Nw, wd, wh, ww]
+        Nd, Nh, Nw = x.shape[2:5]
+
+        x = x.contiguous().view(B, C, Nd * Nh * Nw, wd * wh * ww)
+
+        # 🔥 Stable tokenization
+        mean = x.mean(dim=-1)
+        std = x.std(dim=-1)
+
+        tokens = mean + 0.3 * std   # slightly safer weight
+
+        # Normalize tokens (VERY IMPORTANT for attention)
+        tokens = tokens / (tokens.std(dim=-1, keepdim=True) + 1e-6)
+
+        # [B, N, C]
         tokens = tokens.permute(0, 2, 1)
-    
-        return tokens
+
+        # 🔥 return shape info explicitly
+        return tokens, (Nd, Nh, Nw), (wd, wh, ww)
 
 
 class KernelMixingAttention(nn.Module):
@@ -83,9 +92,9 @@ class KernelMixingAttention(nn.Module):
     def forward(self, tokens):
         attn_out, _ = self.attn(tokens, tokens, tokens)
         logits = self.proj(attn_out)
-        weights = F.softmax(logits, dim=-1)
+        # weights = F.softmax(logits, dim=-1)
         
-        return weights  # [B, N, K]
+        return logits  # [B, N, K]
 
    
 class AnisotropicSwinBlock(nn.Module):
@@ -93,14 +102,13 @@ class AnisotropicSwinBlock(nn.Module):
         self,
         in_ch,
         out_ch,
-        depth_kernels=(3, 5, 7),
-        window_size=(1, 21, 21),
+        window_size=(1, 11, 11),
         use_attention=True
     ):
         super().__init__()
 
         self.conv_suite = AnisotropicConvSuite(
-            in_ch, out_ch, depth_kernels
+            in_ch, out_ch
         )
         reduced_ch = max(1, in_ch // 2)
         self.reduce = nn.Conv3d(in_ch, reduced_ch, 1)
@@ -112,7 +120,7 @@ class AnisotropicSwinBlock(nn.Module):
         if use_attention:
             self.window_pool = WindowPool3D(window_size)
             self.attn = KernelMixingAttention(
-                embed_dim=in_ch,
+                embed_dim=reduced_ch,
                 num_kernels=self.num_kernels
             )
         else:
@@ -123,58 +131,77 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
+        # print("encoder K:", w_E2.shape[1])
+
         x_small = F.avg_pool3d(x, kernel_size=(2,4,4), stride=(2,4,4))
-
         x_small = self.reduce(x_small)
-
+    
         B, C_s, D_s, H_s, W_s = x_small.shape
     
         feats = self.conv_suite(x)
     
         if self.use_attention:
-            tokens = self.window_pool(x_small) # [B, N, C]
     
-            weights = self.attn(tokens)  # [B, N, K]
-    
-            wd, wh, ww = self.window_pool._last_window
-    
-            Nd = D_s // wd
-            Nh = H_s // wh
-            Nw = W_s // ww
-    
-            assert tokens.shape[1] == Nd * Nh * Nw, \
-                f"Token mismatch: {tokens.shape[1]} vs {Nd*Nh*Nw}"
-            assert wd > 0 and wh > 0 and ww > 0, "Invalid window size"
-            assert D_s >= wd and H_s >= wh and W_s >= ww, "Window larger than input"
-            weights = weights.reshape(B, Nd, Nh, Nw, self.num_kernels)
-    
-            weights = weights.permute(0, 4, 1, 2, 3)  # [B, K, Nd, Nh, Nw]
-    
-            weights = F.interpolate(
-                weights,
+            tokens, (Nd, Nh, Nw), (wd, wh, ww) = self.window_pool(x_small)
+
+            # positional bias
+            pos = torch.linspace(-1, 1, tokens.shape[1], device=tokens.device)
+            pos = pos.unsqueeze(0).unsqueeze(-1)
+            tokens = tokens + 0.2 * pos
+            
+            # -----------------------------
+            # Attention → logits
+            # -----------------------------
+            logits = self.attn(tokens)  # [B, N, K]
+            
+            # -----------------------------
+            # Spatial residual (reuse tokens)
+            # -----------------------------
+            w_local_tokens = tokens.mean(dim=-1, keepdim=True)  # [B, N, 1]
+            w_local_tokens = w_local_tokens.expand(-1, -1, logits.shape[-1])  # [B, N, K]
+            
+            logits = logits + 0.3 * w_local_tokens
+            
+            # -----------------------------
+            # Reshape → spatial map
+            # -----------------------------
+            assert tokens.shape[1] == Nd * Nh * Nw
+            
+            logits = logits.reshape(B, Nd, Nh, Nw, self.num_kernels)
+            logits = logits.permute(0, 4, 1, 2, 3)  # [B, K, Nd, Nh, Nw]
+            
+            logits = F.interpolate(
+                logits,
                 size=(D, H, W),
                 mode="trilinear",
                 align_corners=False
             )
-    
-            # 🔥 re-normalize
-            weights = F.softmax(weights, dim=1)
+            
+            # normalize (your style)
+            weights = logits / (logits.std(dim=1, keepdim=True) + 1e-5)
     
         else:
             weights = F.softmax(self.alpha, dim=0)
             weights = weights.view(1, self.num_kernels, 1, 1, 1)
             weights = weights.expand(B, -1, D, H, W)
     
-        y = sum(weights[:, i:i+1] * f for i, f in enumerate(feats))
-    
+        # -----------------------------
+        # Mixing
+        # -----------------------------
+       # just aggregate features normally (no kernel mixing here)
+        weights = F.softmax(weights, dim=1)
+        assert weights.shape[1] == len(feats)
+        y = torch.zeros_like(feats[0])
+        for i, f in enumerate(feats):
+            y = y + weights[:, i:i+1] * f
         y = self.act(self.norm(y))
     
         if return_weights:
             return y, weights
     
         return y
-
-        
+    
+            
 
 class SpatialDownsample3D(nn.Module):
     def __init__(self):
