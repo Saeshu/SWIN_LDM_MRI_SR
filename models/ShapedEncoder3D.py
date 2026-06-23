@@ -156,7 +156,9 @@ class AnisotropicSwinBlock(nn.Module):
         B, C, D, H, W = x.shape
         # print("encoder K:", w_E2.shape[1])
         # x = x.to(device)
-        
+        x = (x - x.mean(dim=(2,3,4), keepdim=True)) / (
+        x.std(dim=(2,3,4), keepdim=True) + 1e-5
+            )
         x_small = F.interpolate(
         x,
         scale_factor=(1, 0.5, 0.5),
