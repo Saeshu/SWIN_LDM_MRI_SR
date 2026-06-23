@@ -61,8 +61,12 @@ class SmoothedSpatialKernelMixer(SpatialKernelMixer):
         w = torch.clamp(w, -3.0, 3.0)
         
         # 🔥 softmax with temperature
-        temp = 2.0
+        temp = 0.9
         weights = F.softmax(w / temp, dim=1)
+        hard_idx = weights.argmax(dim=1, keepdim=True)
+        hard_mask = torch.zeros_like(weights).scatter_(1, hard_idx, 1.0)
+        
+        weights = 0.7 * weights + 0.3 * hard_mask
 
         # 🔥 mixing
         # print("weights shape:", weights.shape)
