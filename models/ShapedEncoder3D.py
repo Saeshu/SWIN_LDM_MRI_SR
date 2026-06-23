@@ -154,18 +154,50 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-        # print("encoder K:", w_E2.shape[1])
-        # x = x.to(device)
+    
+        # -----------------------------
+        # HF from raw
+        # -----------------------------
+        hf = x - F.avg_pool3d(x, 3, 1, 1)
+        hf = torch.clamp(hf, -3.0, 3.0)
+    
+        # -----------------------------
+        # Normalize
+        # -----------------------------
         x = (x - x.mean(dim=(2,3,4), keepdim=True)) / (
-        x.std(dim=(2,3,4), keepdim=True) + 1e-5
-            )
+            x.std(dim=(2,3,4), keepdim=True) + 1e-5
+        )
+    
+        # -----------------------------
+        # Inject HF
+        # -----------------------------
+        x = x + 0.5 * hf
+    
+        # -----------------------------
+        # Downsample
+        # -----------------------------
         x_small = F.interpolate(
-        x,
-        scale_factor=(1, 0.5, 0.5),
-        mode="trilinear",
-        align_corners=False
-    )
-        x_small = self.reduce(x_small)
+            x,
+            scale_factor=(1, 0.5, 0.5),
+            mode="trilinear",
+            align_corners=False
+        )
+    
+        # -----------------------------
+        # Reduce
+        # -----------------------------
+        x_low = self.reduce(x_small)
+    
+        # -----------------------------
+        # HF in SAME space
+        # -----------------------------
+        x_high = x_low - F.avg_pool3d(x_low, 3, 1, 1)
+        x_low  = x_low  / (x_low.std(dim=(2,3,4), keepdim=True) + 1e-5)
+        x_high = x_high / (x_high.std(dim=(2,3,4), keepdim=True) + 1e-5) 
+        x_small = x_low + 0.5 * x_high
+        # print("HF:", hf.std().item())
+        # print("HF std before reduce:", x_high.std().item())
+        # print("After reduce:", x_small.std().item())
         # print("x_small device:", x_small.device)
         # print("reduce device:", next(self.reduce.parameters()).device)
         B, C_s, D_s, H_s, W_s = x_small.shape
