@@ -182,7 +182,8 @@ class AnisotropicSwinBlock(nn.Module):
             mode="trilinear",
             align_corners=False
         )
-    
+        x_small = x_small - x_small.mean(dim=(2,3,4), keepdim=True)
+            
         # -----------------------------
         # Reduce
         # -----------------------------
@@ -208,6 +209,10 @@ class AnisotropicSwinBlock(nn.Module):
     
             tokens, (Nd, Nh, Nw), (wd, wh, ww) = self.window_pool(x_small)
 
+            if self.training:
+                perm = torch.randperm(tokens.shape[1], device=tokens.device)
+                tokens = tokens[:, perm]
+
             # positional bias
             coords = torch.stack(torch.meshgrid(
             torch.linspace(-1,1,Nd, device=tokens.device),
@@ -221,21 +226,23 @@ class AnisotropicSwinBlock(nn.Module):
             if coords.shape[-1] < tokens.shape[-1]:
                 coords = F.pad(coords, (0, tokens.shape[-1] - 3))
             
-            tokens = tokens + 0.1 * coords.unsqueeze(0)
+            # tokens = tokens + 0.1 * coords.unsqueeze(0)
             
             
             # -----------------------------
             # Attention → logits
             # -----------------------------
             logits = self.attn(tokens)  # [B, N, K]
-            
+            if self.training:
+                inv_perm = torch.argsort(perm)
+                logits = logits[:, inv_perm]
             # -----------------------------
             # Spatial residual (reuse tokens)
             # -----------------------------
-            w_local_tokens = tokens.mean(dim=-1, keepdim=True)  # [B, N, 1]
-            w_local_tokens = w_local_tokens.expand(-1, -1, logits.shape[-1])  # [B, N, K]
+            # w_local_tokens = tokens.mean(dim=-1, keepdim=True)  # [B, N, 1]
+            # w_local_tokens = w_local_tokens.expand(-1, -1, logits.shape[-1])  # [B, N, K]
             
-            logits = logits + 0.3 * w_local_tokens
+            # logits = logits + 0.3 * w_local_tokens
             
             # -----------------------------
             # Reshape → spatial map
@@ -251,9 +258,31 @@ class AnisotropicSwinBlock(nn.Module):
                 mode="trilinear",
                 align_corners=False
             )
+
+            
+            feat_strength = x_small.abs().mean(dim=1, keepdim=True)
+            
+            feat_strength = F.interpolate(
+                feat_strength,
+                size=logits.shape[2:],
+                mode="trilinear",
+                align_corners=False
+            )
+            
+            logits = logits + 0.3 * feat_strength
             
             # normalize (your style)
-            weights = logits / (logits.std(dim=1, keepdim=True) + 1e-5)
+            # remove global spatial bias
+            logits = logits - logits.mean(dim=(2,3,4), keepdim=True)
+            
+            # normalize across kernels
+            logits = logits / (logits.std(dim=1, keepdim=True) + 1e-5)
+            
+            # small noise to break symmetry
+            logits = logits + 0.01 * torch.randn_like(logits)
+            
+            # softmax
+            weights = F.softmax(logits / 0.8, dim=1)
     
         else:
             weights = F.softmax(self.alpha, dim=0)
