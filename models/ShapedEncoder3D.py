@@ -8,18 +8,24 @@ class AnisotropicConvSuite(nn.Module):
         super().__init__()
 
         self.kernels = nn.ModuleList([
-            # full spatial
-            nn.Conv3d(in_ch, out_ch, kernel_size=(1,3,3), padding=(0,1,1)),
 
-            # directional spatial
-            nn.Conv3d(in_ch, out_ch, kernel_size=(1,3,1), padding=(0,1,0)),  # vertical
-            nn.Conv3d(in_ch, out_ch, kernel_size=(1,1,3), padding=(0,0,1)),  # horizontal
-
-            # depth
-            nn.Conv3d(in_ch, out_ch, kernel_size=(3,1,1), padding=(1,0,0)),
-
-            # channel mixer
-            nn.Conv3d(in_ch, out_ch, kernel_size=1)
+            # 1. low-pass (structure)
+            nn.Sequential(
+                nn.AvgPool3d((1,3,3), stride=1, padding=(0,1,1)),
+                nn.Conv3d(in_ch, out_ch, 1)   # 🔥 FIX
+            ),
+        
+            # 2. high-pass (edges)
+            nn.Conv3d(in_ch, out_ch, 1),
+        
+            # 3. spatial
+            nn.Conv3d(in_ch, out_ch, (1,3,3), padding=(0,1,1)),
+        
+            # 4. depth
+            nn.Conv3d(in_ch, out_ch, (3,1,1), padding=(1,0,0)),
+        
+            # 5. identity
+            nn.Conv3d(in_ch, out_ch, 1)
         ])
 
         self.num_paths = len(self.kernels)
@@ -27,19 +33,19 @@ class AnisotropicConvSuite(nn.Module):
     def forward(self, x):
         return [conv(x) for conv in self.kernels]
 
-def shifted_pad(x, shift_d, shift_h, shift_w):
-    """
-    Non-circular shift using padding (no wrap-around).
-    """
-    B, C, D, H, W = x.shape
-
-    # pad on the "front" side
-    x = F.pad(x, (shift_w, 0, shift_h, 0, shift_d, 0))
-
-    # crop back to original size
-    x = x[:, :, :D, :H, :W]
-
-    return x
+    def shifted_pad(x, shift_d, shift_h, shift_w):
+        """
+        Non-circular shift using padding (no wrap-around).
+        """
+        B, C, D, H, W = x.shape
+    
+        # pad on the "front" side
+        x = F.pad(x, (shift_w, 0, shift_h, 0, shift_d, 0))
+    
+        # crop back to original size
+        x = x[:, :, :D, :H, :W]
+    
+        return x
     
 class WindowPool3D(nn.Module):
     def __init__(self, window_size=(1, 7, 7), shift=False):
@@ -50,51 +56,45 @@ class WindowPool3D(nn.Module):
     def forward(self, x):
         B, C, D, H, W = x.shape
         wd, wh, ww = self.window_size
-
-        # 🔥 SHIFT (correct)
-        if self.shift:
-            shift_d = wd // 2
-            shift_h = wh // 2
-            shift_w = ww // 2
-            x = shifted_pad(x, shift_d, shift_h, shift_w)
-        # Clamp window size
-        wd = min(wd, D)
-        wh = min(wh, H)
-        ww = min(ww, W)
-
-        # Ensure divisibility (IMPORTANT)
-        D_trim = (D // wd) * wd
-        H_trim = (H // wh) * wh
-        W_trim = (W // ww) * ww
-
-        x = x[:, :, :D_trim, :H_trim, :W_trim]
-
-        # Unfold into windows
+    
+        # -----------------------------
+        # Compute padding
+        # -----------------------------
+        pad_d = (wd - D % wd) % wd
+        pad_h = (wh - H % wh) % wh
+        pad_w = (ww - W % ww) % ww
+    
+        x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d))
+    
+        # 🔥 NEW: capture padded size
+        D_pad, H_pad, W_pad = x.shape[2:]
+    
+        # -----------------------------
+        # Unfold
+        # -----------------------------
         x = x.unfold(2, wd, wd) \
              .unfold(3, wh, wh) \
              .unfold(4, ww, ww)
-
-        # [B, C, Nd, Nh, Nw, wd, wh, ww]
+    
         Nd, Nh, Nw = x.shape[2:5]
-
+    
         x = x.contiguous().view(B, C, Nd * Nh * Nw, wd * wh * ww)
-
-        # 🔥 Stable tokenization
+    
+        # -----------------------------
+        # Tokenization
+        # -----------------------------
         mean = x.mean(dim=-1)
         std = x.std(dim=-1)
-
-        tokens = mean + 0.3 * std   # slightly safer weight
-
-        # Normalize tokens (VERY IMPORTANT for attention)
+    
+        tokens = mean + 0.1 * std
         tokens = tokens / (tokens.std(dim=-1, keepdim=True) + 1e-6)
-
-        # [B, N, C]
+    
         tokens = tokens.permute(0, 2, 1)
-
-        # 🔥 return shape info explicitly
-        return tokens, (Nd, Nh, Nw), (wd, wh, ww)
-
-
+    
+        # 🔥 RETURN padded size
+        return tokens, (Nd, Nh, Nw), (wd, wh, ww), (D_pad, H_pad, W_pad)
+    
+    
 class KernelMixingAttention(nn.Module):
     def __init__(self, embed_dim, num_kernels, num_heads=4):
         super().__init__()
@@ -207,7 +207,9 @@ class AnisotropicSwinBlock(nn.Module):
     
         if self.use_attention:
     
-            tokens, (Nd, Nh, Nw), (wd, wh, ww) = self.window_pool(x_small)
+            tokens, (Nd, Nh, Nw), (wd, wh, ww), (D_pad, H_pad, W_pad) = self.window_pool(x_small)
+
+            D_orig, H_orig, W_orig = x_small.shape[2:]
 
             if self.training:
                 perm = torch.randperm(tokens.shape[1], device=tokens.device)
@@ -254,11 +256,21 @@ class AnisotropicSwinBlock(nn.Module):
             
             logits = F.interpolate(
                 logits,
+                size=(D_pad, H_pad, W_pad),
+                mode="trilinear",
+                align_corners=False
+            )
+            
+            # step 2: crop to original x_small
+            logits = logits[:, :, :D_s, :H_s, :W_s]
+            
+            # 🔥 step 3: upscale to FULL resolution (CRITICAL)
+            logits = F.interpolate(
+                logits,
                 size=(D, H, W),
                 mode="trilinear",
                 align_corners=False
             )
-
             
             feat_strength = x_small.abs().mean(dim=1, keepdim=True)
             
@@ -274,14 +286,8 @@ class AnisotropicSwinBlock(nn.Module):
             # normalize (your style)
             # remove global spatial bias
             logits = logits - logits.mean(dim=(2,3,4), keepdim=True)
-            
-            # normalize across kernels
             logits = logits / (logits.std(dim=1, keepdim=True) + 1e-5)
-            
-            # small noise to break symmetry
             logits = logits + 0.01 * torch.randn_like(logits)
-            
-            # softmax
             weights = F.softmax(logits / 0.8, dim=1)
     
         else:
@@ -293,7 +299,7 @@ class AnisotropicSwinBlock(nn.Module):
         # Mixing
         # -----------------------------
        # just aggregate features normally (no kernel mixing here)
-        weights = F.softmax(weights, dim=1)
+        # weights = F.softmax(weights, dim=1)
         assert weights.shape[1] == len(feats)
         y = torch.zeros_like(feats[0])
         for i, f in enumerate(feats):
