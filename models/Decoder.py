@@ -153,6 +153,7 @@ class DecoderConvSuite(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
 
+        # 🔥 ALL must output out_ch
         self.conv_low = nn.Conv3d(in_ch, out_ch, 1)
         self.conv_high = nn.Conv3d(in_ch, out_ch, 1)
 
@@ -160,15 +161,13 @@ class DecoderConvSuite(nn.Module):
         self.conv_identity = nn.Conv3d(in_ch, out_ch, 1)
         self.conv_depth = nn.Conv3d(in_ch, out_ch, (3,1,1), padding=(1,0,0))
 
-        self.num_paths = 5
-
     def forward(self, x):
         low = F.avg_pool3d(x, (1,3,3), stride=1, padding=(0,1,1))
         high = x - low
 
         feats = [
-            self.conv_low(low),        # ✅ now out_ch
-            self.conv_high(high),      # ✅ now out_ch
+            self.conv_low(low),
+            self.conv_high(high),
             self.conv_3x3x1(x),
             self.conv_identity(x),
             self.conv_depth(x),
