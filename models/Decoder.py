@@ -28,51 +28,75 @@ class SpatialKernelMixer(nn.Module):
         return y
     
 class SmoothedSpatialKernelMixer(SpatialKernelMixer):
-    def __init__(self, smooth=True):
+    def __init__(self, smooth=False, topk=2, temp=0.4):
         super().__init__()
         self.smooth = smooth
+        self.topk = topk
+        self.temp = temp
 
     def forward(self, feats, w, return_weights=False):
         assert all(f.shape[1] == feats[0].shape[1] for f in feats), \
-        "All kernel outputs must have same channel dim"
+            "All kernel outputs must have same channel dim"
+
+        # -----------------------------
+        # Match spatial resolution
+        # -----------------------------
         w = F.interpolate(
             w,
             size=feats[0].shape[2:],
             mode="trilinear",
             align_corners=False
-        )
+        ).float().contiguous()
 
-        w = w.float().contiguous()
+        # -----------------------------
+        # (OPTIONAL) smoothing — OFF by default
+        # -----------------------------
+        if self.smooth:
+            w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
 
-        # 🔥 spatial smoothing
-        # if self.smooth:
-        #     w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
-        # w = F.avg_pool3d(w, kernel_size=(1,3,3), stride=1, padding=(0,1,1))
-        w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1)) * 0.5 + w * 0.5
-        
-        # 🔥 competition
-        w = w - 0.5 * w.mean(dim=1, keepdim=True)
+        # -----------------------------
+        # Competition (center across kernels)
+        # -----------------------------
+        w = w - w.mean(dim=1, keepdim=True)
 
-        # 🔥 safer normalization
+        # -----------------------------
+        # Normalize across kernels
+        # -----------------------------
         std = torch.clamp(w.std(dim=1, keepdim=True), min=1e-3)
         w = w / std
-        w = w + 0.01 * torch.randn_like(w)
-        
-        w = torch.clamp(w, -3.0, 3.0)
-        
-        # 🔥 softmax with temperature
-        temp = 0.9
-        weights = F.softmax(w / temp, dim=1)
-        hard_idx = weights.argmax(dim=1, keepdim=True)
-        hard_mask = torch.zeros_like(weights).scatter_(1, hard_idx, 1.0)
-        
-        weights = 0.7 * weights + 0.3 * hard_mask
 
-        # 🔥 mixing
-        # print("weights shape:", weights.shape)
-        # print("num feats:", len(feats))
-        # print("feat shape:", feats[0].shape)
+        # -----------------------------
+        # Break symmetry (important)
+        # -----------------------------
+        w = w + 0.01 * torch.randn_like(w)
+
+        # -----------------------------
+        # Clamp for stability
+        # -----------------------------
+        w = torch.clamp(w, -3.0, 3.0)
+
+        # -----------------------------
+        # Sharper softmax (CRITICAL)
+        # -----------------------------
+        weights = F.softmax(w / self.temp, dim=1)
+
+        # -----------------------------
+        # 🔥 TOP-K ROUTING (REAL FIX)
+        # -----------------------------
+        if self.topk is not None:
+            vals, idx = torch.topk(weights, k=self.topk, dim=1)
+
+            mask = torch.zeros_like(weights)
+            mask.scatter_(1, idx, 1.0)
+
+            weights = weights * mask
+            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
+
+        # -----------------------------
+        # 🔥 Mixing (residual-style — better)
+        # -----------------------------
         y = torch.zeros_like(feats[0])
+
         for i, f in enumerate(feats):
             y = y + weights[:, i:i+1] * f
 
