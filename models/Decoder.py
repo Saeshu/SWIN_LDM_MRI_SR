@@ -103,8 +103,9 @@ class SpatialUpsample3D(nn.Module):
         # 2D upsample (cheap & safe)
         x = F.interpolate(
             x,
-            scale_factor=self.scale_factor,
-            mode="nearest"
+            scale_factor=(1,2,2),
+            mode="trilinear",
+            align_corners=False
         )
 
         _, _, H2, W2 = x.shape
