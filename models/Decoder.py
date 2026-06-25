@@ -28,7 +28,7 @@ class SpatialKernelMixer(nn.Module):
         return y
     
 class SmoothedSpatialKernelMixer(SpatialKernelMixer):
-    def __init__(self, smooth=False, topk=2, temp=0.4):
+    def __init__(self, smooth=False, topk=2, temp=1.5):
         super().__init__()
         self.smooth = smooth
         self.topk = topk
