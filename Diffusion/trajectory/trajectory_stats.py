@@ -255,7 +255,14 @@ def trajectory_statistics(
         contraction = 1.0
 
     else:
+        update = z_prev - z
 
+        gt_direction = residual_gt - z_prev
+        direction_cosine = F.cosine_similarity(
+            update.flatten(1),
+            gt_direction.flatten(1),
+            dim=1
+        )
         step_change = torch.norm(
             z - z_prev
         ).item()
@@ -279,6 +286,8 @@ def trajectory_statistics(
         "contraction": contraction,
 
         "noise_std": z.std().item(),
+
+        "direction_cosine": direction_cosine
 
     }
 
