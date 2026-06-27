@@ -152,7 +152,7 @@ def compute_trajectory_metrics(
     x0_pred: torch.Tensor,
     residual_gt: torch.Tensor,
     v_pred: torch.Tensor,
-    v_target: torch.Tensor,
+    v_target: None,
 ) -> Dict[str, float]:
 
     metrics = {
@@ -187,6 +187,14 @@ def compute_trajectory_metrics(
                 v_pred,
                 v_target,
             ),
+
+        if v_target is not None:
+            metrics["confidence"] = prediction_confidence(
+                v_pred,
+                v_target,
+            )
+        else:
+            metrics["confidence"] = float("nan")
 
     }
 
