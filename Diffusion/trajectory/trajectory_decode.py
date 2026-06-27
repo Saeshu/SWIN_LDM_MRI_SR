@@ -137,13 +137,15 @@ def create_decoding_history():
 
     return {
 
-        "timesteps": [],
+    "timesteps": [],
 
-        "latent": [],
+    "latent": [],          # visualization
 
-        "decoded": [],
+    "latent_raw": [],      # full latent
 
-    }
+    "decoded": [],
+
+}
 
 
 # ----------------------------------------------------------
@@ -160,6 +162,10 @@ def append_decoding_step(
 
     history["latent"].append(
         decoded_dict["latent"]
+    )
+
+    history["latent_raw"].append(
+    decoded_dict["latent_raw"]
     )
 
     history["decoded"].append(
