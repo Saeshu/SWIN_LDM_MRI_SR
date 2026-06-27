@@ -9,10 +9,10 @@ def main():
     from models.eps_unet3D import ConditionalEpsUNet3D
     
     from Diffusion.LinearNoise import NoiseScheduler
-    from Diffusion.ema import EMA
+    from utils.ema import EMA
     from Diffusion.train import DiffusionTrainer
-    from Diffusion.validate import DiffusionValidator
-    from Diffusion.logger import TrainingLogger
+    from Diffusion.validate import validate
+    from Utils.logger import TrainingLogger
 
     
     device = torch.device(
