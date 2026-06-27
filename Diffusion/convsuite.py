@@ -64,33 +64,102 @@ class TimeGatedConvSuite(nn.Module):
         self.mid = MidSliceSuite(channels)
         self.long = LongSliceSuite(channels)
 
-    def forward(self, x, t):
-        """
-        x: (B, C, H, W, D)
-        t: (B,) diffusion timestep
-        """
+    def forward(
+    self,
+    x,
+    t,
+    expert_mask=None,
+    return_gates=False,
+):
+    """
+    Parameters
+    ----------
+    x : [B,C,D,H,W]
 
-        # --- compute gates ---
-        te = self.time_embed(t)
-        gates = self.time_mlp(te)           # (B, 3)
-        gates = torch.softmax(gates, dim=-1)
+    t : [B]
 
-        gA, gB, gC = gates[:, 0], gates[:, 1], gates[:, 2]
+    expert_mask :
+        None      -> normal routing
 
-        # reshape for broadcasting
-        gA = gA[:, None, None, None, None]
-        gB = gB[:, None, None, None, None]
-        gC = gC[:, None, None, None, None]
+        [1,1,1]   -> normal
 
-        # --- specialist outputs ---
-        out = (
-            gA * self.spatial(x) +
-            gB * self.mid(x) +
-            gC * self.long(x)
+        [1,0,1]   -> disable mid
+
+        [0,1,0]   -> only mid
+
+    return_gates :
+        return routing probabilities
+    """
+
+    # -------------------------------------------------
+    # Compute routing
+    # -------------------------------------------------
+
+    te = self.time_embed(t)
+
+    logits = self.time_mlp(te)
+
+    gates = torch.softmax(logits, dim=-1)
+
+    
+    # -------------------------------------------------
+    # Optional masking
+    # -------------------------------------------------
+
+    if expert_mask is not None:
+
+        mask = torch.tensor(
+            expert_mask,
+            device=gates.device,
+            dtype=gates.dtype,
         )
 
-        return out
+        gates = gates * mask
 
+        # Renormalize
+
+        gates = gates / (
+            gates.sum(
+                dim=-1,
+                keepdim=True
+            ) + 1e-8
+        )
+
+    # -------------------------------------------------
+    # Experts
+    # -------------------------------------------------
+
+    spatial = self.spatial(x)
+
+    mid = self.mid(x)
+
+    long = self.long(x)
+
+    # -------------------------------------------------
+    # Broadcast gates
+    # -------------------------------------------------
+
+    gates = gates[..., None, None, None, None]
+
+    out = (
+
+        gates[:,0] * spatial +
+
+        gates[:,1] * mid +
+
+        gates[:,2] * long
+
+    )
+
+    # -------------------------------------------------
+    # Return
+    # -------------------------------------------------
+
+    if return_gates:
+
+        return out, gates.squeeze(-1).squeeze(-1).squeeze(-1).squeeze(-1)
+
+    return out
 
     
 
