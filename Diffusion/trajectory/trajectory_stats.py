@@ -351,32 +351,34 @@ def finalize_statistics(
 # ============================================================
 
 def update_trajectory(
-
     trajectory,
-
     z,
-
     z_prev,
-
     x0_pred,
-
     residual_gt,
-
     v_pred,
-
-    v_target,
-
+    v_target=None,
 ):
 
     latent = latent_statistics(z)
 
-    pred = prediction_statistics(
-
-        v_pred,
-
-        v_target,
-
-    )
+    if v_target is not None:
+        pred = prediction_statistics(
+            v_pred,
+            v_target,
+        )
+    else:
+        pred = {
+            "mse": float("nan"),
+            "l1": float("nan"),
+            "corr": float("nan"),
+            "cosine": float("nan"),
+            "confidence": float("nan"),
+            "pred_mean": v_pred.mean().item(),
+            "pred_std": v_pred.std().item(),
+            "target_mean": float("nan"),
+            "target_std": float("nan"),
+        }
 
     residual = residual_statistics(
 
