@@ -164,13 +164,7 @@ def train_epoch(
 
         self.logger.update(
 
-            loss=outputs["loss"],
-
-            diffusion=outputs["losses"]["diffusion"],
-
-            residual=outputs["losses"]["residual"],
-
-            reconstruction=outputs["losses"]["reconstruction"],
+             **outputs["losses"]
 
         )
 
