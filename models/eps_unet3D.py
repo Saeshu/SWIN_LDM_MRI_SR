@@ -9,6 +9,93 @@ from models.ae import WE2FiLM
 #SinusoidalTimeEmbedding = SinusoidalTimeEmbedding(128)
 scheduler = NoiseScheduler()
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class WE2Conditioning(nn.Module):
+    """
+    FiLM conditioning from encoder routing maps.
+
+    Inputs
+    ------
+    h      : [B,C,D,H,W]
+    w_e2   : [B,K,D',H',W']
+
+    Output
+    ------
+    conditioned h
+    """
+
+    def __init__(
+        self,
+        latent_channels=256,
+        num_kernels=4,
+        hidden=64,
+    ):
+        super().__init__()
+
+        self.pool = nn.AdaptiveAvgPool3d(1)
+
+        self.mlp = nn.Sequential(
+
+            nn.Linear(num_kernels, hidden),
+
+            nn.SiLU(),
+
+            nn.Linear(hidden, latent_channels * 2),
+
+        )
+
+    def forward(
+        self,
+        h,
+        w_e2,
+    ):
+
+        # ----------------------------------
+        # Resize routing maps
+        # ----------------------------------
+
+        w = F.interpolate(
+            w_e2,
+            size=h.shape[2:],
+            mode="trilinear",
+            align_corners=False,
+        )
+
+        # ----------------------------------
+        # Global routing descriptor
+        # ----------------------------------
+
+        w = self.pool(w)
+
+        w = w.flatten(1)
+
+        # ----------------------------------
+        # Produce gamma/beta
+        # ----------------------------------
+
+        gamma_beta = self.mlp(w)
+
+        gamma, beta = torch.chunk(
+            gamma_beta,
+            2,
+            dim=1,
+        )
+
+        gamma = gamma[:, :, None, None, None]
+        beta = beta[:, :, None, None, None]
+
+        # ----------------------------------
+        # FiLM
+        # ----------------------------------
+
+        out = (1 + gamma) * h + beta
+
+        return out
+
 class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -69,7 +156,10 @@ class ConditionalEpsUNet3D(nn.Module):
         self.tdim = tdim
         self.num_timesteps = num_timesteps
         self.use_temporal_suite = use_temporal_suite
-        self.we2_cond = WE2Conditioning()
+        self.we2_cond = WE2Conditioning(
+            latent_channels=z_ch,
+            num_kernels=5,      # or whatever your encoder outputs
+        )
 
         self.time_embed = SinusoidalTimeEmbedding(self.tdim)
 
