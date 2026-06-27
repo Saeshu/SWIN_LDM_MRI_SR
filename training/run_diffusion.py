@@ -54,7 +54,7 @@ val_loader = DataLoader(
 # Autoencoder
 ##########################################################
 
-ae = AutoEncoder(...).to(device)
+ae = AutoEncoder().to(device)
 
 ckpt = torch.load(
     "best_autoencoder.pt",
