@@ -278,3 +278,30 @@ def print_model_summary(model):
     print(f"Total Parameters     : {total:,}")
     print(f"Trainable Parameters : {trainable:,}")
     print("=" * 60)
+
+def gpu_memory():
+
+    if not torch.cuda.is_available():
+        return {}
+
+    return {
+        "allocated_gb":
+            torch.cuda.memory_allocated() / 1024**3,
+
+        "reserved_gb":
+            torch.cuda.memory_reserved() / 1024**3,
+
+        "max_allocated_gb":
+            torch.cuda.max_memory_allocated() / 1024**3,
+    }
+
+def tensor_statistics(x):
+
+    return {
+        "shape": tuple(x.shape),
+        "mean": x.mean().item(),
+        "std": x.std().item(),
+        "min": x.min().item(),
+        "max": x.max().item(),
+        "norm": x.norm().item(),
+    }
