@@ -17,7 +17,7 @@ from Diffusion.logger import TrainingLogger
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
-
+path = "/content/drive/MyDrive/IXI-T1"
 ##########################################################
 # Dataset
 ##########################################################
