@@ -22,7 +22,7 @@ device = torch.device(
 # Dataset
 ##########################################################
 
-train_ds = MRIDataset(...)
+train_ds = MRIDataset(path)
 
 #val_ds = MRIDataset(...)
 
