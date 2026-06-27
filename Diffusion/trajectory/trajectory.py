@@ -202,43 +202,26 @@ def run_trajectory(
 
         # self target only for confidence statistics
         update_trajectory(
-
             statistics,
-
             z,
-
             z_prev,
-
             x0_pred,
-
             residual_gt,
-
             v_pred,
-
-            v_pred.detach(),
-
+            v_target,
         )
 
         ######################################################
         # Metrics
         ######################################################
-
         metrics = compute_trajectory_metrics(
-
             z,
-
             z_prev,
-
             x0_pred,
-
             residual_gt,
-
             v_pred,
-
-            v_pred.detach(),
-
-        )
-
+            v_target,
+        ) 
         append_metrics(
 
             metric_history,
