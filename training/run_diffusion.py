@@ -1,19 +1,19 @@
-import torch
-from torch.cuda.amp import GradScaler
-from torch.utils.data import DataLoader
-
-from Data.dataset import MRIDataset
-
-from models.ae import AutoEncoder
-from models.eps_unet3D import ConditionalEpsUNet3D
-
-from Diffusion.LinearNoise import NoiseScheduler
-from Diffusion.ema import EMA
-from Diffusion.train import DiffusionTrainer
-from Diffusion.validate import DiffusionValidator
-from Diffusion.logger import TrainingLogger
-
 def main():
+    import torch
+    from torch.cuda.amp import GradScaler
+    from torch.utils.data import DataLoader
+    
+    from Data.dataset import MRIDataset
+    
+    from models.ae import AutoEncoder
+    from models.eps_unet3D import ConditionalEpsUNet3D
+    
+    from Diffusion.LinearNoise import NoiseScheduler
+    from Diffusion.ema import EMA
+    from Diffusion.train import DiffusionTrainer
+    from Diffusion.validate import DiffusionValidator
+    from Diffusion.logger import TrainingLogger
+
     
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
