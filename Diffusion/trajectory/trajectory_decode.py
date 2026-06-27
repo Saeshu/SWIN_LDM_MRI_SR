@@ -114,11 +114,17 @@ def decode_latent(
 
     return {
 
-        "latent": latent_snapshot(x0_pred),
+    # visualization
+    "latent": latent_snapshot(x0_pred),
 
-        "decoded": extract_slices(recon),
+    # 🔥 raw latent for downstream analyses
+    "latent_raw": x0_pred.detach().cpu(),
 
-        "full_volume": recon.cpu(),
+    # decoded image
+    "decoded": extract_slices(recon),
+
+    # optional full reconstruction
+    "full_volume": recon.detach().cpu(),
 
     }
 
