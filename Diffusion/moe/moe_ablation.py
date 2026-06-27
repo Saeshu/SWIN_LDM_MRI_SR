@@ -60,27 +60,25 @@ def expert_ablation(
     # Remove one expert
     #########################################################
 
+
     for expert in range(num_experts):
 
-        mask = [1] * num_experts
+        mask = torch.ones(
+            num_experts,
+            device=z.device,
+        )
+        
+        mask[expert] = 0.0
 
-        mask[expert] = 0
 
         pred = unet(
-
-            z,
-
-            t,
-
-            cond,
-
-            w_e2,
-
-            alpha,
-
+            z=z,
+            t=t,
+            cond=cond,
+            w_e2=w_e2,
+            alpha=alpha,
             expert_mask=mask,
-
-        )
+            )
 
         results[f"expert_{expert}"] = {
 
