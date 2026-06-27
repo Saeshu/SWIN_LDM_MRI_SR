@@ -1,137 +1,192 @@
 import torch
-import torch.nn.functional as F
+from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from models.ShapedEncoder3D import ShapedEncoder3D
-from models.Decoder import Decoder3D
-from models.eps_unet3D import ConditionalEpsUNet3D
-from Diffusion.LinearNoise import LinearNoiseSchedule
 from Data.dataset import MRIDataset
-from models.utils import *
+
+from models.ae import AutoEncoder
+from models.eps_unet3D import ConditionalEpsUNet3D
+
+from Diffusion.LinearNoise import NoiseScheduler
+from Diffusion.ema import EMA
+from Diffusion.train import DiffusionTrainer
+from Diffusion.validate import DiffusionValidator
+from Diffusion.logger import TrainingLogger
 
 
-def train_diffusion(
-    data_root,
-    ae_ckpt,
-    device="cuda",
-    lr=2e-4,
-    num_steps=50000,
-    log_every=100,
-    save_every=2000,
-    patch_size=64,
-    t_min=200,
-):
-    # -------------------------
-    # Dataset
-    # -------------------------
-    dataset = MRIDataset(data_root)
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
 
-    # -------------------------
-    # Load autoencoder
-    # -------------------------
-    encoder = ShapedEncoder3D().to(device)
-    decoder = Decoder3D().to(device)
+##########################################################
+# Dataset
+##########################################################
 
-    ckpt = torch.load(ae_ckpt, map_location=device)
-    encoder.load_state_dict(ckpt["encoder"])
-    decoder.load_state_dict(ckpt["decoder"])
+train_ds = MRIDataset(...)
 
-    encoder.eval()
-    decoder.eval()
+val_ds = MRIDataset(...)
 
-    for p in encoder.parameters():
-        p.requires_grad = False
-    for p in decoder.parameters():
-        p.requires_grad = False
+train_loader = DataLoader(
 
-    # -------------------------
-    # Diffusion model
-    # -------------------------
-    eps_model = ConditionalEpsUNet3D(
-        z_ch=32,
-        cond_ch=32
-    ).to(device)
+    train_ds,
 
-    optimizer = torch.optim.Adam(eps_model.parameters(), lr=lr)
-    schedule = LinearNoiseSchedule(T=1000, device=device)
+    batch_size=1,
 
-    step = 0
-    pbar = tqdm(total=num_steps)
+    shuffle=True,
 
-    while step < num_steps:
-        idx = torch.randint(0, len(dataset), (1,)).item()
-        vol = dataset[idx]          # [1, D, H, W]
+    num_workers=4,
 
-        # patch training (important!)
-        hr = random_patch_3d(vol, patch_size)
-        hr = hr.unsqueeze(0).to(device)
+    pin_memory=True,
 
-        # LR version
-        lr_img = F.avg_pool3d(hr, kernel_size=2)
+)
 
-        # encode
-        with torch.no_grad():
-            z_hr, _ = encoder(hr)
-            z_lr, _ = encoder(lr_img)
+val_loader = DataLoader(
 
-        # upsample condition
-        z_cond = F.interpolate(
-            z_lr,
-            size=z_hr.shape[2:],
-            mode="trilinear",
-            align_corners=False
-        )
+    val_ds,
 
-        # -------------------------
-        # partial diffusion timestep
-        # -------------------------
-        B = z_hr.shape[0]
-        t = torch.randint(
-            low=t_min,
-            high=schedule.T,
-            size=(B,),
-            device=device
-        )
+    batch_size=1,
 
-        # -------------------------
-        # forward diffusion
-        # -------------------------
-        noise = torch.randn_like(z_hr)
-        alpha_bar = schedule.alpha_bars[t].view(B, 1, 1, 1, 1)
+    shuffle=False,
 
-        z_t = torch.sqrt(alpha_bar) * z_hr + torch.sqrt(1 - alpha_bar) * noise
+)
 
-        # also corrupt conditioning (important)
-        cond_noise = 0.5 * torch.randn_like(z_cond)
-        z_cond_t = (
-            torch.sqrt(alpha_bar) * z_cond +
-            torch.sqrt(1 - alpha_bar) * cond_noise
-        )
+##########################################################
+# Autoencoder
+##########################################################
 
-        # -------------------------
-        # predict noise
-        # -------------------------
-        pred = eps_model(z_t, t, z_cond_t)
-        loss = F.mse_loss(pred, noise)
+ae = AutoEncoder(...).to(device)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+ckpt = torch.load(
+    "best_autoencoder.pt",
+    map_location=device,
+)
 
-        if step % log_every == 0:
-            print(f"[DIFF] step {step:06d} | loss {loss.item():.4e}")
+ae.load_state_dict(ckpt)
 
-        if step % save_every == 0 and step > 0:
-            save_checkpoint(
-                {
-                    "eps_model": eps_model.state_dict(),
-                    "step": step,
-                },
-                f"checkpoints/diffusion_step_{step}.pt",
-            )
+ae.eval()
 
-        step += 1
-        pbar.update(1)
+for p in ae.parameters():
 
-    pbar.close()
+    p.requires_grad = False
+
+##########################################################
+# Diffusion
+##########################################################
+
+unet = ConditionalEpsUNet3D(
+
+    z_ch=256,
+
+    cond_ch=256,
+
+).to(device)
+
+##########################################################
+# Optimizer
+##########################################################
+
+optimizer = torch.optim.AdamW(
+
+    unet.parameters(),
+
+    lr=1e-4,
+
+    weight_decay=1e-4,
+
+)
+
+##########################################################
+# Scheduler
+##########################################################
+
+noise_scheduler = NoiseScheduler()
+
+##########################################################
+# EMA
+##########################################################
+
+ema = EMA(
+
+    unet,
+
+    beta=0.9999,
+
+)
+
+##########################################################
+# AMP
+##########################################################
+
+scaler = GradScaler()
+
+##########################################################
+# Validation
+##########################################################
+
+validator = DiffusionValidator(
+
+    ae=ae,
+
+    ema=ema,
+
+    scheduler=noise_scheduler,
+
+    device=device,
+
+)
+
+##########################################################
+# Logger
+##########################################################
+
+logger = TrainingLogger()
+
+##########################################################
+# Trainer
+##########################################################
+
+trainer = DiffusionTrainer(
+
+    ae=ae,
+
+    unet=unet,
+
+    optimizer=optimizer,
+
+    noise_scheduler=noise_scheduler,
+
+    validator=validator,
+
+    logger=logger,
+
+    ema=ema,
+
+    scaler=scaler,
+
+    device=device,
+
+)
+
+##########################################################
+# Callbacks
+##########################################################
+
+from Diffusion.trajectory import run_trajectory
+from Diffusion.moe import analyze_moe
+
+trainer.callbacks["trajectory"] = run_trajectory
+trainer.callbacks["moe"] = analyze_moe
+
+##########################################################
+# Train
+##########################################################
+
+trainer.fit(
+
+    train_loader,
+
+    val_loader,
+
+    epochs=50,
+
+)
