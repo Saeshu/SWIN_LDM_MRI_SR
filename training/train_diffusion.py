@@ -24,7 +24,7 @@ device = torch.device(
 
 train_ds = MRIDataset(...)
 
-val_ds = MRIDataset(...)
+#val_ds = MRIDataset(...)
 
 train_loader = DataLoader(
 
@@ -42,7 +42,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
 
-    val_ds,
+    train_ds,
 
     batch_size=1,
 
