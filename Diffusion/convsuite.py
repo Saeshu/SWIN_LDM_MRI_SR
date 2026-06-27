@@ -65,31 +65,31 @@ class TimeGatedConvSuite(nn.Module):
         self.long = LongSliceSuite(channels)
 
     def forward(
-    self,
-    x,
-    t,
-    expert_mask=None,
-    return_gates=False,
-):
-    """
-    Parameters
-    ----------
-    x : [B,C,D,H,W]
-
-    t : [B]
-
-    expert_mask :
-        None      -> normal routing
-
-        [1,1,1]   -> normal
-
-        [1,0,1]   -> disable mid
-
-        [0,1,0]   -> only mid
-
-    return_gates :
-        return routing probabilities
-    """
+        self,
+        x,
+        t,
+        expert_mask=None,
+        return_gates=False,
+    ):
+        """
+        Parameters
+        ----------
+        x : [B,C,D,H,W]
+    
+        t : [B]
+    
+        expert_mask :
+            None      -> normal routing
+    
+            [1,1,1]   -> normal
+    
+            [1,0,1]   -> disable mid
+    
+            [0,1,0]   -> only mid
+    
+        return_gates :
+            return routing probabilities
+        """
 
     # -------------------------------------------------
     # Compute routing
