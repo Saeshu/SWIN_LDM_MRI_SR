@@ -16,37 +16,48 @@ import torch.nn.functional as F
 
 class WE2Conditioning(nn.Module):
     """
-    FiLM conditioning from encoder routing maps.
+    Spatial conditioning using the encoder routing maps.
 
     Inputs
     ------
-    h      : [B,C,D,H,W]
-    w_e2   : [B,K,D',H',W']
+    h     : [B, C, D, H, W]
+    w_e2  : [B, K, D', H', W']
 
     Output
     ------
-    conditioned h
+    Conditioned latent
     """
 
     def __init__(
         self,
-        latent_channels=256,
+        latent_channels,
         num_kernels=4,
-        hidden=64,
     ):
         super().__init__()
 
-        self.pool = nn.AdaptiveAvgPool3d(1)
+        self.net = nn.Sequential(
 
-        self.mlp = nn.Sequential(
+            nn.Conv3d(
+                num_kernels,
+                latent_channels,
+                kernel_size=3,
+                padding=1,
+            ),
 
-            nn.Linear(num_kernels, hidden),
+            nn.GroupNorm(8, latent_channels),
 
             nn.SiLU(),
 
-            nn.Linear(hidden, latent_channels * 2),
-
+            nn.Conv3d(
+                latent_channels,
+                latent_channels,
+                kernel_size=3,
+                padding=1,
+            ),
         )
+
+        # Learn conditioning strength
+        self.scale = nn.Parameter(torch.tensor(0.1))
 
     def forward(
         self,
@@ -54,10 +65,7 @@ class WE2Conditioning(nn.Module):
         w_e2,
     ):
 
-        # ----------------------------------
-        # Resize routing maps
-        # ----------------------------------
-
+        # Match bottleneck resolution
         w = F.interpolate(
             w_e2,
             size=h.shape[2:],
@@ -65,36 +73,9 @@ class WE2Conditioning(nn.Module):
             align_corners=False,
         )
 
-        # ----------------------------------
-        # Global routing descriptor
-        # ----------------------------------
+        correction = self.net(w)
 
-        w = self.pool(w)
-
-        w = w.flatten(1)
-
-        # ----------------------------------
-        # Produce gamma/beta
-        # ----------------------------------
-
-        gamma_beta = self.mlp(w)
-
-        gamma, beta = torch.chunk(
-            gamma_beta,
-            2,
-            dim=1,
-        )
-
-        gamma = gamma[:, :, None, None, None]
-        beta = beta[:, :, None, None, None]
-
-        # ----------------------------------
-        # FiLM
-        # ----------------------------------
-
-        out = (1 + gamma) * h + beta
-
-        return out
+        return h + self.scale * correction
 
 class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, dim):
