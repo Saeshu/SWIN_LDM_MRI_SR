@@ -139,7 +139,7 @@ class ConditionalEpsUNet3D(nn.Module):
         self.use_temporal_suite = use_temporal_suite
         self.we2_cond = WE2Conditioning(
             latent_channels=z_ch,
-            num_kernels=w_e2.shape[1],      # or whatever your encoder outputs
+            num_kernels=4,      # or whatever your encoder outputs
         )
 
         self.time_embed = SinusoidalTimeEmbedding(self.tdim)
