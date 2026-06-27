@@ -45,15 +45,12 @@ def run_trajectory(
     ae,
     unet,
     noise_scheduler,
-
     z_init,
     z_lr,
     residual_gt,
-
+    v_target=None,          # <-- NEW
     w_e2=None,
-
     alpha=1.0,
-
     save_every=5,
 ):
     """
