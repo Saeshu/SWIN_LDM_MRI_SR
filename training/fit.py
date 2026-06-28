@@ -1,7 +1,7 @@
 def fit(
     self,
     train_loader,
-    val_loader,
+    # val_loader,
     epochs,
     start_epoch=0,
 ):
@@ -42,7 +42,7 @@ def fit(
         # Validation
         ######################################################
 
-        val_stats = self.validate_epoch(val_loader)
+        # val_stats = self.validate_epoch(val_loader)
 
         ######################################################
         # Callbacks
@@ -66,45 +66,45 @@ def fit(
         for key, value in train_stats.items():
             print(f"{key:25s}: {value:.5f}")
 
-        print("\nValidation")
+        # print("\nValidation")
 
-        for key, value in val_stats.items():
-            print(f"{key:25s}: {value:.5f}")
+        # for key, value in val_stats.items():
+        #     print(f"{key:25s}: {value:.5f}")
 
         ######################################################
         # Save last checkpoint
         ######################################################
 
-        save_last(
-            model=self.unet,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            scaler=self.scaler,
-            ema=self.ema,
-            epoch=epoch,
-            save_dir=self.save_dir,
-        )
+        # save_last(
+        #     model=self.unet,
+        #     optimizer=self.optimizer,
+        #     scheduler=self.scheduler,
+        #     scaler=self.scaler,
+        #     ema=self.ema,
+        #     epoch=epoch,
+        #     save_dir=self.save_dir,
+        # )
 
         ######################################################
         # Save best checkpoint
         ######################################################
 
-        metric = val_stats.get(
-            "l1",
-            val_stats.get("loss", 0.0),
-        )
+        # metric = val_stats.get(
+        #     "l1",
+        #     val_stats.get("loss", 0.0),
+        # )
 
-        best_metric = save_best(
-            model=self.unet,
-            metric=metric,
-            best_metric=best_metric,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            scaler=self.scaler,
-            ema=self.ema,
-            epoch=epoch,
-            save_dir=self.save_dir,
-        )
+        # best_metric = save_best(
+        #     model=self.unet,
+        #     metric=metric,
+        #     best_metric=best_metric,
+        #     optimizer=self.optimizer,
+        #     scheduler=self.scheduler,
+        #     scaler=self.scaler,
+        #     ema=self.ema,
+        #     epoch=epoch,
+        #     save_dir=self.save_dir,
+        # )
 
     ##########################################################
     # Finished
@@ -112,4 +112,4 @@ def fit(
 
     print("\nTraining complete.")
 
-    return self.logger.history
+    # return self.logger.history
