@@ -13,7 +13,7 @@ import torch
 from torch.cuda.amp import GradScaler
 
 from Diffusion.advanced_losses import compute_losses
-from Diffusion.checkpoint import save_best, save_last
+from Utils.checkpoint import save_best, save_last
 
 
 class DiffusionTrainer:
