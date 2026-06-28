@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from models.ae import AutoEncoder
-from models.eps_unet import ConditionalEpsUNet3D
+from models.eps_unet3D import ConditionalEpsUNet3D
 from diffusion.schedules import DiffusionSchedule
 from data.dataset import MRIDataset
 from utils.checkpoint import save_checkpoint
