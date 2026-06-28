@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 from models.ae import AutoEncoder
 from models.eps_unet3D import ConditionalEpsUNet3D
-from Diffusion.schedules import DiffusionSchedule
+from Diffusion.LinearNoise import NoiseScheduler
 from Data.dataset import MRIDataset
 from Utils import *
 
