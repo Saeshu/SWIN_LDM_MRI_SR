@@ -442,4 +442,4 @@ def compute_losses(
             "recon": recon_loss,
             "res": res_loss,
             "perc": perc_loss,
-        }
+    }
