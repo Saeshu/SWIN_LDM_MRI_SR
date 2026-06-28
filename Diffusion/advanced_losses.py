@@ -441,5 +441,4 @@ def compute_losses(
             "mse": mse_loss,
             "recon": recon_loss,
             "res": res_loss,
-            "perc": perc_loss,
-    }
+            "perc": perc_loss}
