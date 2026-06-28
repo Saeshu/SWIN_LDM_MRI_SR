@@ -13,7 +13,7 @@ import torch
 from torch.cuda.amp import GradScaler
 
 from Diffusion.advanced_losses import compute_losses
-from Utils.checkpoint import save_best, save_last
+# from Utils.checkpoint import save_best, save_last
 
 
 class DiffusionTrainer:
@@ -44,7 +44,7 @@ class DiffusionTrainer:
         self.unet = unet
 
         self.optimizer = optimizer
-        self.scheduler = scheduler
+        # self.scheduler = scheduler
         self.noise_scheduler = noise_scheduler
 
         # self.validator = validator
@@ -267,9 +267,9 @@ class DiffusionTrainer:
             # Train
             ####################################################
 
-            # train_stats = self.train_epoch(
-            #     train_loader
-            # )
+            train_stats = self.train_epoch(
+                train_loader
+            )
 
             ####################################################
             # Validation
@@ -297,13 +297,13 @@ class DiffusionTrainer:
             # Console summary
             ####################################################
 
-            # print("\nTraining")
+            print("\nTraining")
 
-            # for k, v in train_stats.items():
+            for k, v in train_stats.items():
 
-            #     print(
-            #         f"{k:25s}: {v:.5f}"
-            #     )
+                print(
+                    f"{k:25s}: {v:.5f}"
+                )
 
             # print("\nValidation")
 
