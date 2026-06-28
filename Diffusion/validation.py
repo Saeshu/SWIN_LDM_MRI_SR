@@ -131,7 +131,12 @@ def validate(
         #####################################################
         # Residual latent
         #####################################################
-
+        z_lr = F.interpolate(
+          z_lr,
+          size=z_hr.shape[2:],
+          mode="trilinear",
+          align_corners=False,
+      )
         z_res = z_hr - z_lr
 
         #####################################################
@@ -141,20 +146,18 @@ def validate(
         t = sample_timesteps(
 
             batch_size=z_res.shape[0],
-            T=noise_scheduler.num_timesteps,
+            scheduler=noise_scheduler,
             device=device,
 
-            curriculum="quadratic",
-
-            max_fraction=1.0,
+            bias="quadratic"
 
         )
 
         z_noisy, noise = add_noise(
-            z_res,
-            noise_scheduler,
-            t,
-        )
+          scheduler=noise_scheduler,
+          z=z_res,
+          t=t,
+      )
 
         alpha_bar = get_alpha_bar(
             noise_scheduler,
@@ -322,7 +325,7 @@ def validate(
 
     diagnostics = {
 
-    "z_hr": z_hr
+    "z_hr": z_hr,
     "z_lr": z_lr,
     "z_res": z_res,
     "x0_pred": x0_pred,
