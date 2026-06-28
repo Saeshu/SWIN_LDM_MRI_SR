@@ -21,21 +21,21 @@ from typing import Dict
 
 import torch
 
-from Diffusion.moe_stats import (
+from Diffusion.moe.moe_stats import (
     create_gate_history,
     gate_statistics,
     append_gate_statistics,
     finalize_gate_history,
 )
 
-from Diffusion.moe_entropy import (
+from Diffusion.moe.moe_entropy import (
     create_entropy_history,
     entropy_statistics,
     append_entropy_statistics,
     finalize_entropy_history,
 )
 
-from Diffusion.moe_ablation import (
+from Diffusion.moe.moe_ablation import (
     expert_ablation,
 )
 
