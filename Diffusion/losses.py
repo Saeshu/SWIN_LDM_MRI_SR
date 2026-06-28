@@ -436,10 +436,10 @@ def compute_losses(
 
               # 🔥 SAFE CLEANUP
               del z, z_noisy, v, v_pred, noise
-return {
-        "loss": total_loss,
-        "mse": mse_loss,
-        "recon": recon_loss,
-        "res": res_loss,
-        "perc": perc_loss,
-    }
+    return {
+            "loss": total_loss,
+            "mse": mse_loss,
+            "recon": recon_loss,
+            "res": res_loss,
+            "perc": perc_loss,
+        }
