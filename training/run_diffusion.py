@@ -46,24 +46,7 @@ def main():
     
     # )
     
-    ##########################################################
-    # Autoencoder
-    ##########################################################
     
-    ae = AutoEncoder().to(device)
-    
-    # ckpt = torch.load(
-    #     "best_autoencoder.pt",
-    #     map_location=device,
-    # )
-    
-    # ae.load_state_dict(ckpt)
-    
-    ae.eval()
-    
-    for p in ae.parameters():
-    
-        p.requires_grad = False
     
     ##########################################################
     # Diffusion
@@ -114,7 +97,42 @@ def main():
     ##########################################################
     
     scaler = GradScaler()
+
+    ##########################################################
+    # Autoencoder
+    ##########################################################
     
+    ae = AutoEncoder().to(device)
+    def load_checkpoint(ae, optimizer, scaler, path, device):
+        checkpoint = torch.load(path, map_location=device)
+    
+        ae.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        scaler.load_state_dict(checkpoint["scaler_state"])
+    
+        start_epoch = checkpoint["epoch"] + 1
+    
+        print(f"✅ Loaded checkpoint from epoch {checkpoint['epoch']}")
+    
+        return start_epoch
+    path = '/workspace/ckpt/best8.pt'
+    load_checkpoint(ae, optimizer, scaler, path, device)
+    # ckpt = torch.load(
+    #     "/workspace/ckpt/last8.pt",
+    #     map_location=device,
+    # )
+    
+    # ae.load_state_dict(ckpt)
+    print("AE parameters:",
+          sum(p.numel() for p in ae.parameters()))
+    
+    print("UNet parameters:",
+          sum(p.numel() for p in unet.parameters()))
+    ae.eval()
+    
+    for p in ae.parameters():
+    
+        p.requires_grad = False
     ##########################################################
     # Validation
     ##########################################################
@@ -184,5 +202,5 @@ def main():
         epochs=50
     
     )
-if __name__ == "main":
+if __name__ == "__main__":
     main()
