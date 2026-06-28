@@ -155,6 +155,14 @@ def compute_trajectory_metrics(
     v_target: None,
 ) -> Dict[str, float]:
 
+    if v_target is not None:
+      metrics["confidence"] = prediction_confidence(
+          v_pred,
+          v_target,
+      )
+    else:
+      metrics["confidence"] = float("nan")
+
     metrics = {
 
         "distance_to_gt":
@@ -188,15 +196,9 @@ def compute_trajectory_metrics(
                 v_target,
             ),
 
-        if v_target is not None:
-            metrics["confidence"] = prediction_confidence(
-                v_pred,
-                v_target,
-            )
-        else:
-            metrics["confidence"] = float("nan")
+    
 
-    }
+}
 
     return metrics
 def create_metric_history():
