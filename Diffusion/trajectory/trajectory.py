@@ -17,19 +17,19 @@ from Diffusion.losses import (
     predict_x0,
 )
 
-from Diffusion.trajectory_stats import (
+from Diffusion.trajectory.trajectory_stats import (
     create_trajectory,
     update_trajectory,
     finalize_statistics,
 )
 
-from Diffusion.trajectory_metrics import (
+from Diffusion.trajectory.trajectory_metrics import (
     create_metric_history,
     append_metrics,
     compute_trajectory_metrics,
 )
 
-from Diffusion.trajectory_decode import (
+from Diffusion.trajectory.trajectory_decode import (
     create_decoding_history,
     decode_trajectory_step,
     finalize_decoding_history,
