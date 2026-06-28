@@ -32,7 +32,7 @@ def train_epoch(
     # Reset logger
     ##########################################################
 
-    self.logger.running.clear()
+    # self.logger.running.clear()
 
     ##########################################################
     # Optimizer
@@ -162,11 +162,11 @@ def train_epoch(
         # Logger
         ######################################################
 
-        self.logger.update(
+        # self.logger.update(
 
-             **outputs["losses"]
+        #      **outputs["losses"]
 
-        )
+        # )
 
         ######################################################
         # Progress bar
@@ -186,6 +186,6 @@ def train_epoch(
     # Finish epoch
     ##########################################################
 
-    epoch_stats = self.logger.end_epoch()
+    # epoch_stats = self.logger.end_epoch()
 
-    return epoch_stats
+    # return epoch_stats
