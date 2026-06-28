@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-import tqdm.auto as tqdm
+from tqdm.auto import tqdm
 proj_layer = None
 # -----------------------------
 # Training setup
