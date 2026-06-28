@@ -4,10 +4,10 @@ from tqdm import tqdm
 
 from models.ae import AutoEncoder
 from models.eps_unet3D import ConditionalEpsUNet3D
-from diffusion.schedules import DiffusionSchedule
-from data.dataset import MRIDataset
-from utils.checkpoint import save_checkpoint
-from utils.patches import random_patch_3d   # your patch sampler
+from Diffusion.schedules import DiffusionSchedule
+from Data.dataset import MRIDataset
+from Utils.checkpoint import save_checkpoint
+from Utils.patches import random_patch_3d   # your patch sampler
 
 
 def train_diffusion(
