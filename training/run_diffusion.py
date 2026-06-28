@@ -9,7 +9,7 @@ def main():
     from models.eps_unet3D import ConditionalEpsUNet3D
     
     from Diffusion.LinearNoise import NoiseScheduler
-    from utils.ema import EMA
+    from Utils.EMA import EMA
     from Diffusion.train import DiffusionTrainer
     from Diffusion.validate import validate
     from Utils.logger import TrainingLogger
