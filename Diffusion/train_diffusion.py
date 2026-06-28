@@ -2,8 +2,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from models.encoder import ShapedEncoder3D
-from models.decoder import Decoder3D
+from models.ae import AutoEncoder
 from models.eps_unet import ConditionalEpsUNet3D
 from diffusion.schedules import DiffusionSchedule
 from data.dataset import MRIDataset
