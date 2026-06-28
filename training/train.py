@@ -28,8 +28,8 @@ class DiffusionTrainer:
         unet,
         optimizer,
         noise_scheduler,
-        validator,
-        logger,
+        # validator,
+        # logger,
         device,
         ema=None,
         scheduler=None,
@@ -47,8 +47,8 @@ class DiffusionTrainer:
         self.scheduler = scheduler
         self.noise_scheduler = noise_scheduler
 
-        self.validator = validator
-        self.logger = logger
+        # self.validator = validator
+        # self.logger = logger
 
         self.device = device
 
@@ -69,31 +69,31 @@ class DiffusionTrainer:
 
         ########################################################
 
-        self.callbacks = {
+        # self.callbacks = {
 
-            "trajectory": None,
+        #     "trajectory": None,
 
-            "moe": None,
+        #     "moe": None,
 
-            "representation": None,
+        #     "representation": None,
 
-            "sample": None,
+        #     "sample": None,
 
-        }
+        # }
 
         ########################################################
 
-        self.callback_frequency = {
+        # self.callback_frequency = {
 
-            "trajectory": 5,
+        #     "trajectory": 5,
 
-            "moe": 5,
+        #     "moe": 5,
 
-            "representation": 10,
+        #     "representation": 10,
 
-            "sample": 10,
+        #     "sample": 10,
 
-        }
+        # }
 
     ############################################################
     # Utilities
@@ -203,23 +203,23 @@ class DiffusionTrainer:
 
     ############################################################
 
-    @torch.no_grad()
-    def validate_epoch(
-        self,
-        dataloader,
-    ):
-        raise NotImplementedError
+    # @torch.no_grad()
+    # def validate_epoch(
+    #     self,
+    #     dataloader,
+    # ):
+    #     raise NotImplementedError
 
     ############################################################
 
-    @torch.no_grad()
-    def run_callbacks(
-        self,
-        epoch,
-        hr,
-        lr,
-    ):
-        raise NotImplementedError
+    # @torch.no_grad()
+    # def run_callbacks(
+    #     self,
+    #     epoch,
+    #     hr,
+    #     lr,
+    # ):
+    #     raise NotImplementedError
 
     ############################################################
     # Training Loop
@@ -228,7 +228,7 @@ class DiffusionTrainer:
     def fit(
         self,
         train_loader,
-        val_loader,
+        # val_loader,
         epochs,
         start_epoch=0,
     ):
@@ -237,11 +237,11 @@ class DiffusionTrainer:
         # Fixed callback batch
         ########################################################
 
-        callback_hr, callback_lr = next(
-            iter(val_loader)
-        )
+        # callback_hr, callback_lr = next(
+        #     iter(val_loader)
+        # )
 
-        best_metric = float("inf")
+        # best_metric = float("inf")
 
         ########################################################
 
@@ -267,120 +267,120 @@ class DiffusionTrainer:
             # Train
             ####################################################
 
-            train_stats = self.train_epoch(
-                train_loader
-            )
+            # train_stats = self.train_epoch(
+            #     train_loader
+            # )
 
             ####################################################
             # Validation
             ####################################################
 
-            val_stats = self.validate_epoch(
-                val_loader
-            )
+            # val_stats = self.validate_epoch(
+            #     val_loader
+            # )
 
             ####################################################
             # Callbacks
             ####################################################
 
-            self.run_callbacks(
+            # self.run_callbacks(
 
-                epoch,
+            #     epoch,
 
-                callback_hr,
+            #     callback_hr,
 
-                callback_lr,
+            #     callback_lr,
 
-            )
+            # )
 
             ####################################################
             # Console summary
             ####################################################
 
-            print("\nTraining")
+            # print("\nTraining")
 
-            for k, v in train_stats.items():
+            # for k, v in train_stats.items():
 
-                print(
-                    f"{k:25s}: {v:.5f}"
-                )
+            #     print(
+            #         f"{k:25s}: {v:.5f}"
+            #     )
 
-            print("\nValidation")
+            # print("\nValidation")
 
-            for k, v in val_stats.items():
+            # for k, v in val_stats.items():
 
-                print(
-                    f"{k:25s}: {v:.5f}"
-                )
+            #     print(
+            #         f"{k:25s}: {v:.5f}"
+            #     )
 
             ####################################################
             # Save checkpoints
             ####################################################
 
-            save_last(
+        #     save_last(
 
-                model=self.unet,
+        #         model=self.unet,
 
-                optimizer=self.optimizer,
+        #         optimizer=self.optimizer,
 
-                scheduler=self.scheduler,
+        #         scheduler=self.scheduler,
 
-                scaler=self.scaler,
+        #         scaler=self.scaler,
 
-                ema=self.ema,
+        #         ema=self.ema,
 
-                epoch=epoch,
+        #         epoch=epoch,
 
-                save_dir=self.save_dir,
+        #         save_dir=self.save_dir,
 
-            )
+        #     )
 
-            metric = val_stats.get(
+        #     metric = val_stats.get(
 
-                "l1",
+        #         "l1",
 
-                val_stats.get(
+        #         val_stats.get(
 
-                    "loss",
+        #             "loss",
 
-                    0.0,
+        #             0.0,
 
-                ),
+        #         ),
 
-            )
+        #     )
 
-            best_metric = save_best(
+        #     best_metric = save_best(
 
-                model=self.unet,
+        #         model=self.unet,
 
-                metric=metric,
+        #         metric=metric,
 
-                best_metric=best_metric,
+        #         best_metric=best_metric,
 
-                optimizer=self.optimizer,
+        #         optimizer=self.optimizer,
 
-                scheduler=self.scheduler,
+        #         scheduler=self.scheduler,
 
-                scaler=self.scaler,
+        #         scaler=self.scaler,
 
-                ema=self.ema,
+        #         ema=self.ema,
 
-                epoch=epoch,
+        #         epoch=epoch,
 
-                save_dir=self.save_dir,
+        #         save_dir=self.save_dir,
 
-            )
+        #     )
 
-            ####################################################
-            # Epoch summary
-            ####################################################
+        #     ####################################################
+        #     # Epoch summary
+        #     ####################################################
 
-            self.logger.summary()
+        #     # self.logger.summary()
 
-        ########################################################
+        # ########################################################
 
         print(
             "\nTraining complete."
         )
 
-        return self.logger.history
+        # return self.logger.history
