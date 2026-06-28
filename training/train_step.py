@@ -1,8 +1,11 @@
+import torch
+import torch.nn.functional as F
+
 def train_step(
     self,
     hr: torch.Tensor,
     lr: torch.Tensor,
-    debug: bool = False,
+    debug: bool = True,
 ):
     """
     Perform one diffusion optimization step.
@@ -95,7 +98,12 @@ def _encode(self, hr, lr):
 
     z_hr, w_e2 = self.ae.encode(hr)
     z_lr, _ = self.ae.encode(lr)
-
+    z_lr = F.interpolate(
+    z_lr,
+    size=z_hr.shape[2:],
+    mode="trilinear",
+    align_corners=False,
+)
     z_res = z_hr - z_lr
 
     return {
