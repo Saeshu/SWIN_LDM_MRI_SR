@@ -2,23 +2,23 @@ def main():
     import torch
     from torch.cuda.amp import GradScaler
     from torch.utils.data import DataLoader
-    
+    from torch.amp import GradScaler
     from Data.dataset import MRIDataset
-    
+    from Data.loader import create_dataloaders
     from models.ae import AutoEncoder
     from models.eps_unet3D import ConditionalEpsUNet3D
     
     from Diffusion.LinearNoise import NoiseScheduler
     from Utils.EMA import EMA
-    from Diffusion.train import DiffusionTrainer
-    from Diffusion.validate import validate
-    from Utils.logger import TrainingLogger
+    from training.train import DiffusionTrainer
+    #from Diffusion.validate import validate
+    #from Utils.logger import TrainingLogger
 
     
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    path = "/content/drive/MyDrive/IXI-T1"
+    path = "/workspace/dataset"
     ##########################################################
     # Dataset
     ##########################################################
@@ -27,29 +27,24 @@ def main():
     
     #val_ds = MRIDataset(...)
     
-    train_loader = DataLoader(
-    
-        train_ds,
-    
-        batch_size=1,
-    
-        shuffle=True,
-    
-        num_workers=4,
-    
-        pin_memory=True,
-    
+    train_loader, _ = create_dataloaders(
+    data_root="/workspace/dataset",
+    batch_size=1,
+    crop_size=(32, 128, 128),
+    downscale_factor=None,
+    num_workers=4,
+    val_split=0.0
     )
     
-    val_loader = DataLoader(
+    # val_loader = DataLoader(
     
-        train_ds,
+    #     val_ds,
     
-        batch_size=1,
+    #     batch_size=1,
     
-        shuffle=False,
+    #     shuffle=False,
     
-    )
+    # )
     
     ##########################################################
     # Autoencoder
@@ -57,12 +52,12 @@ def main():
     
     ae = AutoEncoder().to(device)
     
-    ckpt = torch.load(
-        "best_autoencoder.pt",
-        map_location=device,
-    )
+    # ckpt = torch.load(
+    #     "best_autoencoder.pt",
+    #     map_location=device,
+    # )
     
-    ae.load_state_dict(ckpt)
+    # ae.load_state_dict(ckpt)
     
     ae.eval()
     
@@ -110,7 +105,7 @@ def main():
     
         unet,
     
-        beta=0.9999,
+        decay=0.9999,
     
     )
     
@@ -124,23 +119,23 @@ def main():
     # Validation
     ##########################################################
     
-    validator = DiffusionValidator(
+    # validator = DiffusionValidator(
     
-        ae=ae,
+    #     ae=ae,
     
-        ema=ema,
+    #     ema=ema,
     
-        scheduler=noise_scheduler,
+    #     scheduler=noise_scheduler,
     
-        device=device,
+    #     device=device,
     
-    )
+    # )
     
     ##########################################################
     # Logger
     ##########################################################
     
-    logger = TrainingLogger()
+    #logger = TrainingLogger()
     
     ##########################################################
     # Trainer
@@ -156,9 +151,9 @@ def main():
     
         noise_scheduler=noise_scheduler,
     
-        validator=validator,
+        # validator=validator,
     
-        logger=logger,
+        # logger=logger,
     
         ema=ema,
     
@@ -172,11 +167,11 @@ def main():
     # Callbacks
     ##########################################################
     
-    from Diffusion.trajectory import run_trajectory
-    from Diffusion.moe import analyze_moe
+    # from Diffusion.trajectory import run_trajectory
+    # from Diffusion.moe import analyze_moe
     
-    trainer.callbacks["trajectory"] = run_trajectory
-    trainer.callbacks["moe"] = analyze_moe
+    # trainer.callbacks["trajectory"] = run_trajectory
+    # trainer.callbacks["moe"] = analyze_moe
     
     ##########################################################
     # Train
@@ -186,9 +181,7 @@ def main():
     
         train_loader,
     
-        val_loader,
-    
-        epochs=50,
+        epochs=50
     
     )
 if __name__ == "main":
