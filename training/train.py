@@ -151,15 +151,80 @@ class DiffusionTrainer:
     ############################################################
     # Internal functions
     ############################################################
+    import torch.nn.functional as F
 
+    def _encode(
+        self,
+        hr,
+        lr,
+    ):
+        """
+        Encode HR and LR images into latent space.
+
+        Returns
+        -------
+        dict containing:
+            z_hr
+            z_lr
+            z_res
+            w_e2
+        """
+
+        with torch.no_grad():
+
+            ####################################################
+            # Encode
+            ####################################################
+
+            z_hr, w_e2 = self.ae.encode(hr)
+
+            z_lr, _ = self.ae.encode(lr)
+
+            ####################################################
+            # Match latent resolution
+            ####################################################
+
+            if z_lr.shape[2:] != z_hr.shape[2:]:
+
+                z_lr = F.interpolate(
+
+                    z_lr,
+
+                    size=z_hr.shape[2:],
+
+                    mode="trilinear",
+
+                    align_corners=False,
+
+                )
+
+            ####################################################
+            # Residual latent
+            ####################################################
+
+            z_res = z_hr - z_lr
+
+        return {
+
+            "z_hr": z_hr,
+
+            "z_lr": z_lr,
+
+            "z_res": z_res,
+
+            "w_e2": w_e2,
+
+        }
+    
     def _forward(
         self,
-        z_hr,
-        z_lr,
-        z_res,
-        w_e2,
+        encoded
     ):
-    
+
+        z_hr = encoded["z_hr"]
+        z_lr = encoded["z_lr"]
+        z_res = encoded["z_res"]
+        w_e2 = encoded["w_e2"]
         ####################################################
         # timestep
         ####################################################
@@ -214,43 +279,207 @@ class DiffusionTrainer:
             )
     
         return {
-    
-            "t": t,
-    
-            "noise": noise,
-    
-            "alpha_bar": alpha_bar,
-    
-            "z_noisy": z_noisy,
-    
-            "v_target": v_target,
-    
-            "v_pred": v_pred,
-    
-            "x0_pred": x0_pred,
-    
-        }
+
+          **encoded,
+
+          "v_pred": v_pred,
+
+          "v_target": v_target,
+
+          "x0_pred": x0_pred,
+
+          # Useful for diagnostics / future losses
+          "t": t,
+
+          "noise": noise,
+
+          "alpha_bar": alpha_bar,
+
+          "z_noisy": z_noisy,
+
+      }
     
         
     
         ############################################################
     
+    
+
     def _compute_loss(
-            self,
-            outputs,
-        ):
-    
-            return compute_losses(
-    
-                v_pred=outputs["v_pred"],
-    
-                v_target=outputs["v_target"],
-    
-                x0_pred=outputs["x0_pred"],
-    
-                residual_gt=outputs["z_res"],
-    
+        ae,
+        outputs,
+        perc_net=None,
+    ):
+        """
+        Compute all training losses.
+
+        Returns
+        -------
+        dict
+        """
+
+        ####################################################
+        # Diffusion loss
+        ####################################################
+        
+        x0_pred=outputs["x0_pred"]
+
+        z_res=outputs["z_res"]
+
+        z_hr=outputs["z_hr"]
+
+        z_lr=outputs["z_lr"]
+
+        v_pred=outputs["v_pred"]
+
+        v_target=outputs["v_target"]
+
+
+        mse_loss = F.mse_loss(
+            v_pred,
+            v_target,
+        )
+
+        ####################################################
+        # Residual loss
+        ####################################################
+
+        res_loss = F.l1_loss(
+            x0_pred,
+            z_res,
+        )
+
+        ####################################################
+        # Reconstruction
+        ####################################################
+
+        recon = x0_pred + z_lr
+
+        recon_loss = F.l1_loss(
+            recon,
+            z_hr,
+        )
+
+        ####################################################
+        # Optional perceptual
+        ####################################################
+
+        perc_loss = torch.tensor(
+            0.0,
+            device=x0_pred.device,
+        )
+
+        if perc_net is not None:
+
+            x_base = x0_pred.mean(
+                dim=1,
+                keepdim=True,
             )
+
+            z_base = z_res.mean(
+                dim=1,
+                keepdim=True,
+            )
+
+            x_input = torch.cat(
+
+                [
+                    F.avg_pool3d(x_base, 2),
+                    x_base - F.interpolate(
+                        F.avg_pool3d(
+                            F.avg_pool3d(x_base, 2),
+                            2,
+                        ),
+                        size=F.avg_pool3d(
+                            x_base,
+                            2,
+                        ).shape[2:],
+                        mode="trilinear",
+                        align_corners=False,
+                    ),
+                ],
+
+                dim=1,
+
+            )
+
+            z_input = torch.cat(
+
+                [
+                    F.avg_pool3d(z_base, 2),
+                    z_base - F.interpolate(
+                        F.avg_pool3d(
+                            F.avg_pool3d(z_base, 2),
+                            2,
+                        ),
+                        size=F.avg_pool3d(
+                            z_base,
+                            2,
+                        ).shape[2:],
+                        mode="trilinear",
+                        align_corners=False,
+                    ),
+                ],
+
+                dim=1,
+
+            )
+
+            f_pred, _ = perc_net(
+                x_input
+            )
+
+            with torch.no_grad():
+
+                f_gt, _ = perc_net(
+                    z_input
+                )
+
+            perc_loss = F.l1_loss(
+                f_pred,
+                f_gt,
+            )
+
+        ####################################################
+        # Total
+        ####################################################
+
+        total = (
+
+            1.0 * mse_loss
+
+            +
+
+            0.5 * res_loss
+
+            +
+
+            0.5 * recon_loss
+
+            +
+
+            0.05 * perc_loss
+
+        )
+
+        ####################################################
+        # Return
+        ####################################################
+
+        return {
+
+            "total": total,
+
+            "mse": mse_loss,
+
+            "recon": recon_loss,
+
+            "res": res_loss,
+
+            "perc": perc_loss,
+
+        }
+    
 
     def _optimizer_step(
         self,
