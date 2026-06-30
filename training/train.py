@@ -151,51 +151,215 @@ class DiffusionTrainer:
     # Internal functions
     ############################################################
 
-    def _encode(
-        self,
-        hr,
-        lr,
-    ):
-        raise NotImplementedError
-
-    ############################################################
-
     def _forward(
         self,
-        encoded,
+        z_hr,
+        z_lr,
+        z_res,
+        w_e2,
     ):
-        raise NotImplementedError
-
-    ############################################################
-
-    def _compute_loss(
-        self,
-        outputs,
-    ):
-
-        return compute_losses(
-
-            v_pred=outputs["v_pred"],
-
-            v_target=outputs["v_target"],
-
-            x0_pred=outputs["x0_pred"],
-
-            residual_gt=outputs["z_res"],
-
+    
+        ####################################################
+        # timestep
+        ####################################################
+    
+        t = self.sample_timesteps(
+            z_res.shape[0]
         )
+    
+        ####################################################
+        # noise
+        ####################################################
+    
+        noise = torch.randn_like(z_res)
+    
+        z_noisy = self.noise_scheduler.add_noise(
+            z_res,
+            t,
+            noise,
+        )
+    
+        ####################################################
+        # target
+        ####################################################
+    
+        alpha_bar = self.noise_scheduler.alpha_bars[t].view(
+            -1, 1, 1, 1, 1
+        )
+    
+        v_target = (
+            torch.sqrt(alpha_bar) * noise
+            - torch.sqrt(1 - alpha_bar) * z_res
+        )
+    
+        ####################################################
+        # UNet
+        ####################################################
+    
+        with torch.cuda.amp.autocast():
+    
+            v_pred = self.unet(
+                z=z_noisy,
+                t=t,
+                cond=z_lr,
+                w_e2=w_e2,
+                alpha=self.cfg_scale,
+            )
+    
+            x0_pred = self.predict_x0(
+                z_noisy,
+                v_pred,
+                alpha_bar,
+            )
+    
+        return {
+    
+            "t": t,
+    
+            "noise": noise,
+    
+            "alpha_bar": alpha_bar,
+    
+            "z_noisy": z_noisy,
+    
+            "v_target": v_target,
+    
+            "v_pred": v_pred,
+    
+            "x0_pred": x0_pred,
+    
+        }
+    
+        
+    
+        ############################################################
+    
+    def _compute_loss(
+            self,
+            outputs,
+        ):
+    
+            return compute_losses(
+    
+                v_pred=outputs["v_pred"],
+    
+                v_target=outputs["v_target"],
+    
+                x0_pred=outputs["x0_pred"],
+    
+                residual_gt=outputs["z_res"],
+    
+            )
 
+    def _optimizer_step(
+        self,
+        loss,
+    ):
+    
+        self.optimizer.zero_grad(
+            set_to_none=True
+        )
+    
+        self.scaler.scale(loss).backward()
+    
+        self.scaler.unscale_(self.optimizer)
+    
+        torch.nn.utils.clip_grad_norm_(
+    
+            self.unet.parameters(),
+    
+            self.grad_clip,
+    
+        )
+    
+        self.scaler.step(self.optimizer)
+    
+        self.scaler.update()
+    
+        if self.ema is not None:
+    
+            self.ema.update(self.unet) 
     ############################################################
     # Core training
     ############################################################
+
+import torch
+import torch.nn.functional as F
+
 
     def train_step(
         self,
         hr,
         lr,
-        debug=False,
     ):
-        raise NotImplementedError
+    
+        hr = hr.to(self.device)
+    
+        lr = lr.to(self.device)
+    
+        ####################################################
+        # Encode
+        ####################################################
+    
+        with torch.no_grad():
+    
+            z_hr, w_e2 = self.ae.encode(hr)
+    
+            z_lr, _ = self.ae.encode(lr)
+    
+            z_lr = F.interpolate(
+    
+                z_lr,
+    
+                size=z_hr.shape[2:],
+    
+                mode="trilinear",
+    
+                align_corners=False,
+    
+            )
+    
+        z_res = z_hr - z_lr
+    
+        ####################################################
+        # Forward
+        ####################################################
+    
+        outputs = self._forward(
+    
+            z_hr,
+    
+            z_lr,
+    
+            z_res,
+    
+            w_e2,
+    
+        )
+    
+        ####################################################
+        # Loss
+        ####################################################
+    
+        losses = self._compute_loss({
+    
+            **outputs,
+    
+            "z_res": z_res,
+    
+        })
+    
+        ####################################################
+        # Optimizer
+        ####################################################
+    
+        self._optimizer_step(
+    
+            losses["total"]
+    
+        )
+    
+        return losses
 
     ############################################################
 
