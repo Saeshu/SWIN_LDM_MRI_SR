@@ -51,11 +51,11 @@ def fit(
         # use first validation sample
         hr, lr = next(iter(train_loader))
 
-        self.run_callbacks(
-            epoch=epoch,
-            hr=hr,
-            lr=lr,
-        )
+        # self.run_callbacks(
+        #     epoch=epoch,
+        #     hr=hr,
+        #     lr=lr,
+        # )
 
         ######################################################
         # Logger summary
