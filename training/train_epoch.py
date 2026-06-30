@@ -1,6 +1,6 @@
 from tqdm import tqdm
 import torch
-import torch.nn.functional as F
+
 
 def train_epoch(
     self,
@@ -43,16 +43,7 @@ def train_epoch(
     ##########################################################
     # Progress bar
     ##########################################################
-    # dataloader = loader
 
-    
-    # print(type(pbar))
-    # print(type(batch) if 'batch' in locals() else "batch not yet defined")
-    
-
-    ##########################################################
-    # Loop
-    ##########################################################
     pbar = tqdm(
 
         enumerate(dataloader),
@@ -64,34 +55,33 @@ def train_epoch(
         desc="Training",
 
     )
-    for step, hr in pbar:
 
-        hr = hr.to(self.device)
+    ##########################################################
+    # Loop
+    ##########################################################
 
-    ####################################################
-    # Generate LR on the fly
-    ####################################################
+    for step, batch in pbar:
 
-        lr = F.interpolate(
-            hr,
-            scale_factor=0.5,
-            mode="trilinear",
-            align_corners=False,
-        )
+        ######################################################
+        # Load batch
+        ######################################################
 
-        lr = F.interpolate(
-            lr,
-            size=hr.shape[2:],
-            mode="trilinear",
-            align_corners=False,
-        )
-
-        outputs = self.train_step(
-            hr,
-            lr,
-            debug=False,
-        )
         
+
+        print(f"\nStep {step}")
+        print("batch type:", type(batch))
+
+        if isinstance(batch, (list, tuple)):
+            print("batch length:", len(batch))
+            for i, x in enumerate(batch):
+                print(i, type(x))
+                if torch.is_tensor(x):
+                    print(x.shape)
+        else:
+            print(batch.shape)
+
+        hr, lr = batch
+
         # else:
 
         #     raise ValueError(
@@ -101,7 +91,7 @@ def train_epoch(
         ######################################################
         # Forward
         ######################################################
-
+        
         outputs = self.train_step(
 
             hr,
