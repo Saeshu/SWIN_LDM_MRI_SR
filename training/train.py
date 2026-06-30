@@ -16,7 +16,8 @@ from Diffusion.advanced_losses import compute_losses
 from training.train_epoch import train_epoch
 from training.train_step import train_step
 from training.fit import fit
-
+import torch
+import torch.nn.functional as F
 # from Utils.checkpoint import save_best, save_last
 
 
@@ -283,8 +284,7 @@ class DiffusionTrainer:
     # Core training
     ############################################################
 
-import torch
-import torch.nn.functional as F
+
 
 
     def train_step(
