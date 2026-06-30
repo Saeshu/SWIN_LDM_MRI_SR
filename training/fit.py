@@ -49,7 +49,7 @@ def fit(
         ######################################################
 
         # use first validation sample
-        hr, lr = next(iter(val_loader))
+        hr, lr = next(iter(train_loader))
 
         self.run_callbacks(
             epoch=epoch,
