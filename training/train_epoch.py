@@ -1,6 +1,6 @@
 from tqdm import tqdm
 import torch
-
+import torch.nn.functional as F
 
 def train_epoch(
     self,
@@ -43,7 +43,16 @@ def train_epoch(
     ##########################################################
     # Progress bar
     ##########################################################
+    # dataloader = loader
 
+    
+    # print(type(pbar))
+    # print(type(batch) if 'batch' in locals() else "batch not yet defined")
+    
+
+    ##########################################################
+    # Loop
+    ##########################################################
     pbar = tqdm(
 
         enumerate(dataloader),
@@ -55,26 +64,39 @@ def train_epoch(
         desc="Training",
 
     )
+    for step, hr in pbar:
 
-    ##########################################################
-    # Loop
-    ##########################################################
+        hr = hr.to(self.device)
 
-    for step, batch in pbar:
+    ####################################################
+    # Generate LR on the fly
+    ####################################################
 
-        ######################################################
-        # Load batch
-        ######################################################
+        lr = F.interpolate(
+            hr,
+            scale_factor=0.5,
+            mode="trilinear",
+            align_corners=False,
+        )
 
-        if isinstance(batch, (list, tuple)):
+        lr = F.interpolate(
+            lr,
+            size=hr.shape[2:],
+            mode="trilinear",
+            align_corners=False,
+        )
 
-            hr, lr = batch
+        outputs = self.train_step(
+            hr,
+            lr,
+            debug=False,
+        )
+        
+        # else:
 
-        else:
-
-            raise ValueError(
-                "Expected dataloader to return (hr, lr)"
-            )
+        #     raise ValueError(
+        #         "Expected dataloader to return (hr, lr)"
+        #     )
 
         ######################################################
         # Forward
