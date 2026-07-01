@@ -51,7 +51,7 @@ class DiffusionTrainer:
         self.optimizer = optimizer
         # self.scheduler = scheduler
         self.noise_scheduler = noise_scheduler
-
+        
         # self.validator = validator
         # self.logger = logger
 
@@ -71,7 +71,7 @@ class DiffusionTrainer:
         self.grad_clip = grad_clip
 
         self.cfg_scale = cfg_scale
-
+            
         ########################################################
 
         # self.callbacks = {
@@ -236,7 +236,7 @@ class DiffusionTrainer:
         ####################################################
         # noise
         ####################################################
-    
+        
         noise = torch.randn_like(z_res)
     
         z_noisy = self.noise_scheduler.add_noise(
@@ -248,7 +248,14 @@ class DiffusionTrainer:
         ####################################################
         # target
         ####################################################
-    
+        alpha_bar = self.noise_scheduler.alpha_bars[t]
+        # print("t.device:", t.device)
+
+        #     print("alpha_bars.device:", self.noise_scheduler.alpha_bars.device)
+            
+        #     print("betas.device:", self.noise_scheduler.betas.device)
+            
+        #     print("alphas.device:", self.noise_scheduler.alphas.device)
         alpha_bar = self.noise_scheduler.alpha_bars[t].view(
             -1, 1, 1, 1, 1
         )
@@ -321,7 +328,7 @@ class DiffusionTrainer:
         ####################################################
         # Diffusion loss
         ####################################################
-        
+       
         x0_pred=outputs["x0_pred"]
 
         z_res=outputs["z_res"]
@@ -334,133 +341,133 @@ class DiffusionTrainer:
 
         v_target=outputs["v_target"]
 
-
-        mse_loss = F.mse_loss(
-            v_pred,
-            v_target,
-        )
-
-        ####################################################
-        # Residual loss
-        ####################################################
-
-        res_loss = F.l1_loss(
-            x0_pred,
-            z_res,
-        )
-
-        ####################################################
-        # Reconstruction
-        ####################################################
-
-        recon = x0_pred + z_lr
-
-        recon_loss = F.l1_loss(
-            recon,
-            z_hr,
-        )
-
-        ####################################################
-        # Optional perceptual
-        ####################################################
-
-        perc_loss = torch.tensor(
-            0.0,
-            device=x0_pred.device,
-        )
-
-        if perc_net is not None:
-
-            x_base = x0_pred.mean(
-                dim=1,
-                keepdim=True,
+        with torch.cuda.amp.autocast():
+            mse_loss = F.mse_loss(
+                v_pred,
+                v_target,
             )
-
-            z_base = z_res.mean(
-                dim=1,
-                keepdim=True,
+    
+            ####################################################
+            # Residual loss
+            ####################################################
+    
+            res_loss = F.l1_loss(
+                x0_pred,
+                z_res,
             )
-
-            x_input = torch.cat(
-
-                [
-                    F.avg_pool3d(x_base, 2),
-                    x_base - F.interpolate(
-                        F.avg_pool3d(
-                            F.avg_pool3d(x_base, 2),
-                            2,
-                        ),
-                        size=F.avg_pool3d(
-                            x_base,
-                            2,
-                        ).shape[2:],
-                        mode="trilinear",
-                        align_corners=False,
-                    ),
-                ],
-
-                dim=1,
-
+    
+            ####################################################
+            # Reconstruction
+            ####################################################
+    
+            recon = x0_pred + z_lr
+    
+            recon_loss = F.l1_loss(
+                recon,
+                z_hr,
             )
-
-            z_input = torch.cat(
-
-                [
-                    F.avg_pool3d(z_base, 2),
-                    z_base - F.interpolate(
-                        F.avg_pool3d(
-                            F.avg_pool3d(z_base, 2),
-                            2,
-                        ),
-                        size=F.avg_pool3d(
-                            z_base,
-                            2,
-                        ).shape[2:],
-                        mode="trilinear",
-                        align_corners=False,
-                    ),
-                ],
-
-                dim=1,
-
+    
+            ####################################################
+            # Optional perceptual
+            ####################################################
+    
+            perc_loss = torch.tensor(
+                0.0,
+                device=x0_pred.device,
             )
-
-            f_pred, _ = perc_net(
-                x_input
-            )
-
-            with torch.no_grad():
-
-                f_gt, _ = perc_net(
-                    z_input
+    
+            if perc_net is not None:
+    
+                x_base = x0_pred.mean(
+                    dim=1,
+                    keepdim=True,
                 )
-
-            perc_loss = F.l1_loss(
-                f_pred,
-                f_gt,
+    
+                z_base = z_res.mean(
+                    dim=1,
+                    keepdim=True,
+                )
+    
+                x_input = torch.cat(
+    
+                    [
+                        F.avg_pool3d(x_base, 2),
+                        x_base - F.interpolate(
+                            F.avg_pool3d(
+                                F.avg_pool3d(x_base, 2),
+                                2,
+                            ),
+                            size=F.avg_pool3d(
+                                x_base,
+                                2,
+                            ).shape[2:],
+                            mode="trilinear",
+                            align_corners=False,
+                        ),
+                    ],
+    
+                    dim=1,
+    
+                )
+    
+                z_input = torch.cat(
+    
+                    [
+                        F.avg_pool3d(z_base, 2),
+                        z_base - F.interpolate(
+                            F.avg_pool3d(
+                                F.avg_pool3d(z_base, 2),
+                                2,
+                            ),
+                            size=F.avg_pool3d(
+                                z_base,
+                                2,
+                            ).shape[2:],
+                            mode="trilinear",
+                            align_corners=False,
+                        ),
+                    ],
+    
+                    dim=1,
+    
+                )
+    
+                f_pred, _ = perc_net(
+                    x_input
+                )
+    
+                with torch.no_grad():
+    
+                    f_gt, _ = perc_net(
+                        z_input
+                    )
+    
+                perc_loss = F.l1_loss(
+                    f_pred,
+                    f_gt,
+                )
+    
+            ####################################################
+            # Total
+            ####################################################
+    
+            total = (
+    
+                1.0 * mse_loss
+    
+                +
+    
+                0.5 * res_loss
+    
+                +
+    
+                0.5 * recon_loss
+    
+                +
+    
+                0.05 * perc_loss
+    
             )
-
-        ####################################################
-        # Total
-        ####################################################
-
-        total = (
-
-            1.0 * mse_loss
-
-            +
-
-            0.5 * res_loss
-
-            +
-
-            0.5 * recon_loss
-
-            +
-
-            0.05 * perc_loss
-
-        )
 
         ####################################################
         # Return
