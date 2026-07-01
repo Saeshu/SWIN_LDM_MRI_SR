@@ -60,21 +60,21 @@ def train_step(
 
     result = {
 
-        "loss": losses["total"].detach(),
+        "loss": losses["total"],
 
         "losses": losses,
 
         "timestep": outputs["t"],
 
-        "v_pred": outputs["v_pred"].detach(),
+        "v_pred": outputs["v_pred"],
 
-        "v_target": outputs["v_target"].detach(),
+        "v_target": outputs["v_target"],
 
-        "x0_pred": outputs["x0_pred"].detach(),
+        "x0_pred": outputs["x0_pred"],
 
-        "z_res": outputs["z_res"].detach(),
+        "z_res": outputs["z_res"],
 
-        "z_lr": outputs["z_lr"].detach(),
+        "z_lr": outputs["z_lr"],
 
     }
 
@@ -82,13 +82,13 @@ def train_step(
 
         result.update({
 
-            "z_hr": outputs["z_hr"].detach(),
+            "z_hr": outputs["z_hr"],
 
-            "z_noisy": outputs["z_noisy"].detach(),
+            "z_noisy": outputs["z_noisy"],
 
-            "noise": outputs["noise"].detach(),
+            "noise": outputs["noise"],
 
-            "alpha_bar": outputs["alpha_bar"].detach(),
+            "alpha_bar": outputs["alpha_bar"],
 
         })
 
