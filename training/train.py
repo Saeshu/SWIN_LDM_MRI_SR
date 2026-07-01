@@ -481,34 +481,34 @@ class DiffusionTrainer:
         }
     
 
-    def _optimizer_step(
-        self,
-        loss,
-    ):
+    # def _optimizer_step(
+    #     self,
+    #     loss,
+    # ):
     
-        self.optimizer.zero_grad(
-            set_to_none=True
-        )
+    #     self.optimizer.zero_grad(
+    #         set_to_none=True
+    #     )
     
-        self.scaler.scale(loss).backward()
+    #     self.scaler.scale(loss).backward()
     
-        self.scaler.unscale_(self.optimizer)
+    #     self.scaler.unscale_(self.optimizer)
     
-        torch.nn.utils.clip_grad_norm_(
+    #     torch.nn.utils.clip_grad_norm_(
     
-            self.unet.parameters(),
+    #         self.unet.parameters(),
     
-            self.grad_clip,
+    #         self.grad_clip,
     
-        )
+    #     )
     
-        self.scaler.step(self.optimizer)
+    #     self.scaler.step(self.optimizer)
     
-        self.scaler.update()
+    #     self.scaler.update()
     
-        if self.ema is not None:
+    #     if self.ema is not None:
     
-            self.ema.update(self.unet) 
+    #         self.ema.update(self.unet) 
     ############################################################
     # Core training
     ############################################################
@@ -582,13 +582,13 @@ class DiffusionTrainer:
         # Optimizer
         ####################################################
     
-        self._optimizer_step(
+        # self._optimizer_step(
     
-            losses["total"]
+        #     losses["total"]
     
-        )
+        # )
     
-        return losses
+        # return losses
 
     ############################################################
 
