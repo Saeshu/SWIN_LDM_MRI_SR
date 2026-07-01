@@ -52,7 +52,7 @@ def train_step(
     # Optimizer
     ########################################################
 
-    self._optimizer_step(losses["total"])
+    # self._optimizer_step(losses["total"])
 
     ########################################################
     # Return
@@ -188,7 +188,12 @@ def _forward(self, encoded):
             alpha_bar,
 
         )
-
+    print("v_pred :", v_pred.dtype)
+    print("v_target :", v_target.dtype)
+    print("x0_pred :", x0_pred.dtype)
+    print("z_res :", z_res.dtype)
+    print("z_hr :", z_hr.dtype)
+    print("z_lr :", z_lr.dtype)
     return {
 
         **encoded,
@@ -210,7 +215,7 @@ def _forward(self, encoded):
     }
 
 def _compute_loss(self, outputs):
-
+    
     return compute_losses(
 
         v_pred=outputs["v_pred"],
