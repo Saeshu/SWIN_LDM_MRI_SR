@@ -18,7 +18,17 @@ def train_epoch(
     dict
         Epoch statistics.
     """
+    running = {
 
+    "loss": 0.0,
+
+    "diffusion": 0.0,
+
+    "reconstruction": 0.0,
+
+    "residual": 0.0,
+
+    }
     ##########################################################
     # Train mode
     ##########################################################
@@ -68,17 +78,17 @@ def train_epoch(
 
         
 
-        print(f"\nStep {step}")
-        print("batch type:", type(batch))
+        # print(f"\nStep {step}")
+        # print("batch type:", type(batch))
 
-        if isinstance(batch, (list, tuple)):
-            print("batch length:", len(batch))
-            for i, x in enumerate(batch):
-                print(i, type(x))
-                if torch.is_tensor(x):
-                    print(x.shape)
-        else:
-            print(batch.shape)
+        # if isinstance(batch, (list, tuple)):
+        #     print("batch length:", len(batch))
+        #     for i, x in enumerate(batch):
+        #         print(i, type(x))
+        #         if torch.is_tensor(x):
+        #             print(x.shape)
+        # else:
+        #     print(batch.shape)
 
         hr, lr = batch
 
@@ -107,7 +117,7 @@ def train_epoch(
         ######################################################
 
         loss = outputs["loss"]
-
+        # print("loss type:", loss.dtype)
         ######################################################
         # Backward
         ######################################################
@@ -158,9 +168,9 @@ def train_epoch(
 
             )
 
-            if self.scheduler is not None:
+            # if self.scheduler is not None:
 
-                self.scheduler.step()
+            #     self.scheduler.step()
 
             if self.ema is not None:
 
@@ -186,18 +196,33 @@ def train_epoch(
 
         pbar.set_postfix(
 
-            loss=f"{outputs['loss'].item():.4f}",
+          loss=f"{outputs['loss'].item():.4f}",
 
-            diff=f"{outputs['losses']['diffusion']:.4f}",
+          mse=f"{outputs['losses']['mse'].item():.4f}",
 
-            recon=f"{outputs['losses']['reconstruction']:.4f}",
+          recon=f"{outputs['losses']['recon'].item():.4f}",
 
+          res=f"{outputs['losses']['res'].item():.4f}",
+          
+          perc=f"{outputs['losses']['perc'].item():.4f}"
         )
+        running["loss"] += outputs["loss"].item()
 
+        running["diffusion"] += outputs["losses"]["mse"].item()
+        
+        running["reconstruction"] += outputs["losses"]["recon"].item()
+        
+        running["residual"] += outputs["losses"]["res"].item()
+        
     ##########################################################
     # Finish epoch
     ##########################################################
+    n = len(dataloader)
 
+    for k in running:
+        running[k] /= n
+    
+    return running
     # epoch_stats = self.logger.end_epoch()
 
     # return epoch_stats
