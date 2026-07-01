@@ -223,24 +223,24 @@ def _compute_loss(self, outputs):
 
     )
 
-def _optimizer_step(self, loss):
+# def _optimizer_step(self, loss):
 
-    self.optimizer.zero_grad(set_to_none=True)
+#     self.optimizer.zero_grad(set_to_none=True)
 
-    self.scaler.scale(loss).backward()
+#     self.scaler.scale(loss).backward()
 
-    self.scaler.unscale_(self.optimizer)
+#     self.scaler.unscale_(self.optimizer)
 
-    torch.nn.utils.clip_grad_norm_(
+#     torch.nn.utils.clip_grad_norm_(
 
-        self.unet.parameters(),
+#         self.unet.parameters(),
 
-        1.0,
+#         1.0,
 
-    )
+#     )
 
-    self.scaler.step(self.optimizer)
+#     self.scaler.step(self.optimizer)
 
-    self.scaler.update()
+#     self.scaler.update()
 
-    self.ema.update(self.unet)
+#     self.ema.update(self.unet)
