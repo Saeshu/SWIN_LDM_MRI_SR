@@ -154,7 +154,10 @@ def compute_losses(
     ####################################################
     # Return
     ####################################################
-
+    print("mse dtype:", mse_loss.dtype)
+    print("recon dtype:", recon_loss.dtype)
+    print("res dtype:", res_loss.dtype)
+    print("total dtype:", total.dtype)
     return {
 
         "total": total,
