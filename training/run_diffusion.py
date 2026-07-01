@@ -78,8 +78,12 @@ def main():
     # Scheduler
     ##########################################################
     
-    noise_scheduler = NoiseScheduler()
+    noise_scheduler = NoiseScheduler().to(device)
     
+    print(noise_scheduler.alpha_bars.device)
+    noise_scheduler.betas = noise_scheduler.betas.to(device)
+    noise_scheduler.alphas = noise_scheduler.alphas.to(device)
+    noise_scheduler.alpha_bars = noise_scheduler.alpha_bars.to(device)
     ##########################################################
     # EMA
     ##########################################################
@@ -103,20 +107,20 @@ def main():
     ##########################################################
     
     ae = AutoEncoder().to(device)
-    def load_checkpoint(ae, optimizer, scaler, path, device):
-        checkpoint = torch.load(path, map_location=device)
+    # def load_checkpoint(ae, optimizer, scaler, path, device):
+    #     checkpoint = torch.load(path, map_location=device)
     
-        ae.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-        scaler.load_state_dict(checkpoint["scaler_state"])
+    #     ae.load_state_dict(checkpoint["model_state"])
+    #     optimizer.load_state_dict(checkpoint["optimizer_state"])
+    #     scaler.load_state_dict(checkpoint["scaler_state"])
     
-        start_epoch = checkpoint["epoch"] + 1
+    #     start_epoch = checkpoint["epoch"] + 1
     
-        print(f"✅ Loaded checkpoint from epoch {checkpoint['epoch']}")
+    #     print(f"✅ Loaded checkpoint from epoch {checkpoint['epoch']}")
     
-        return start_epoch
-    path = '/workspace/ckpt/best8.pt'
-    load_checkpoint(ae, optimizer, scaler, path, device)
+    #     return start_epoch
+    # path = '/workspace/ckpt/best8.pt'
+    # load_checkpoint(ae, optimizer, scaler, path, device)
     # ckpt = torch.load(
     #     "/workspace/ckpt/last8.pt",
     #     map_location=device,
