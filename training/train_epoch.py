@@ -275,7 +275,7 @@ def train_epoch(
     stats["v_pred_std"].append(outputs["v_pred"].std().item())
 
     cos = F.cosine_similarity(
-    outputs["v_target"].flatten(1),
+    outputs["v_pred"].flatten(1),
     outputs["v_target"].flatten(1),
     dim=1,
     ).mean()
