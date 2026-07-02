@@ -40,7 +40,7 @@ def fit(
         # Train
         ######################################################
 
-        train_stats, train_history = self.train_epoch(train_loader)
+        train_stats, train_history = self.train_epoch(train_loader, history)
         if (epoch + 1) % 5 == 0:      # Change to 5 or 10 later
 
             print("\nGenerating sample...\n")
