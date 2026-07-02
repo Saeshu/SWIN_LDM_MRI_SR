@@ -104,11 +104,7 @@ def fit(
 
         
 
-        df = pd.DataFrame(history)
         
-        df.to_csv("baseline_losses.csv", index=False)
-        
-        print(df.tail())
         # print("\nValidation")
 
         # for key, value in val_stats.items():
