@@ -36,9 +36,14 @@ def visualize_with_ema(
     ############################################################
     # Encode LR
     ############################################################
-
-    z_lr, _ = ae.encode(lr)
-
+    z_hr, _ = ae.encode(hr)
+    z_lr, w_e2 = ae.encode(lr)
+    z_lr = F.interpolate(
+    z_lr,
+    size=z_hr.shape[2:],
+    mode="trilinear",
+    align_corners=False,
+    )
     ############################################################
     # Sample latent
     ############################################################
@@ -51,6 +56,8 @@ def visualize_with_ema(
 
         cond=z_lr,
 
+        w_e2 = w_e2,
+
         device=device,
 
         guidance_scale=guidance_scale,
@@ -58,7 +65,8 @@ def visualize_with_ema(
         debug=False,
 
     )
-
+    print("w_e2 shape :", w_e2.shape)
+    print("Cond shape :", z_lr.shape)
     z_sr = sample["latent"]
 
     ############################################################
@@ -100,7 +108,9 @@ def visualize_with_ema(
         "Sagittal": gt[:, :, W // 2],
 
     }
-
+    assert x.shape == gt.shape, (
+    f"Prediction {x.shape}, GT {gt.shape}"
+    )
     ############################################################
     # Plot
     ############################################################
