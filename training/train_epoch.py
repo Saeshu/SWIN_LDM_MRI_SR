@@ -1,6 +1,6 @@
 from tqdm import tqdm
 import torch
-
+import torch.nn.functional as F
 
 def train_epoch(
     self,
@@ -257,6 +257,7 @@ def train_epoch(
         running[k] /= n
     for key in epoch_stats:
         epoch_stats[key] /= num_batch
+        print(key,":", epoch_stats[key])
     stats["z_hr_std"].append(outputs["z_hr"].std().item())
 
     stats["z_lr_std"].append(outputs["z_lr"].std().item())
@@ -272,6 +273,15 @@ def train_epoch(
     stats["v_target_std"].append(outputs["v_target"].std().item())
     
     stats["v_pred_std"].append(outputs["v_pred"].std().item())
+
+    cos = F.cosine_similarity(
+    outputs["v_target"].flatten(1),
+    outputs["v_target"].flatten(1),
+    dim=1,
+    ).mean()
+
+    print("cosine:", cos.item())
+    
     stats["v_ratio"].append(
         epoch_stats["v_pred_std"] /
         (epoch_stats["v_target_std"] + 1e-8)
