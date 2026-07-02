@@ -1,5 +1,6 @@
 from sampling.visualize_latent_ema import visualize_with_ema
 import torch
+import pandas as pd
 def fit(
     self,
     train_loader,
@@ -39,7 +40,7 @@ def fit(
         # Train
         ######################################################
 
-        train_stats = self.train_epoch(train_loader)
+        train_stats, train_history = self.train_epoch(train_loader)
         if (epoch + 1) % 5 == 0:      # Change to 5 or 10 later
 
             print("\nGenerating sample...\n")
@@ -101,6 +102,13 @@ def fit(
         for key, value in train_stats.items():
             print(f"{key:25s}: {value:.5f}")
 
+        
+
+        df = pd.DataFrame(history)
+        
+        df.to_csv("baseline_losses.csv", index=False)
+        
+        print(df.tail())
         # print("\nValidation")
 
         # for key, value in val_stats.items():
