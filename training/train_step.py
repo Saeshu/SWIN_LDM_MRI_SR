@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+
 def train_step(
     self,
     hr: torch.Tensor,
@@ -59,22 +60,32 @@ def train_step(
     ########################################################
 
     result = {
-
+        
         "loss": losses["total"],
 
         "losses": losses,
+        
+        "z_hr": outputs["z_hr"],
 
-        "timestep": outputs["t"],
-
-        "v_pred": outputs["v_pred"],
-
-        "v_target": outputs["v_target"],
-
-        "x0_pred": outputs["x0_pred"],
+        "z_lr": outputs["z_lr"],
 
         "z_res": outputs["z_res"],
 
-        "z_lr": outputs["z_lr"],
+        "w_e2": outputs["w_e2"],
+
+        "t": outputs["t"],
+
+        "noise": outputs["noise"],
+
+        "alpha_bar": outputs["alpha_bar"],
+
+        "z_noisy": outputs["z_noisy"],
+
+        "v_target": outputs["v_target"],
+
+        "v_pred": outputs["v_pred"],
+
+        "x0_pred": outputs["x0_pred"],
 
     }
 
@@ -82,13 +93,28 @@ def train_step(
 
         result.update({
 
-            "z_hr": outputs["z_hr"],
+        "z_hr": outputs["z_hr"],
 
-            "z_noisy": outputs["z_noisy"],
+        "z_lr": outputs["z_lr"],
 
-            "noise": outputs["noise"],
+        "z_res": outputs["z_res"],
 
-            "alpha_bar": outputs["alpha_bar"],
+        "w_e2": outputs["w_e2"],
+
+        "t": outputs["t"],
+
+        "noise": outputs["noise"],
+
+        "alpha_bar": outputs["alpha_bar"],
+
+        "z_noisy": outputs["z_noisy"],
+
+        "v_target": outputs["v_target"],
+
+        "v_pred": outputs["v_pred"],
+
+        "x0_pred": outputs["x0_pred"],
+
 
         })
 
