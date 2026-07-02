@@ -152,5 +152,9 @@ def fit(
     ##########################################################
 
     print("\nTraining complete.")
-
+    df = pd.DataFrame(train_history)
+        
+    df.to_csv("baseline_losses.csv", index=False)
+    
+    print(df.tail())
     # return self.logger.history
