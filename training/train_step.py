@@ -1,295 +1,262 @@
-from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 
-
-def train_epoch(
+def train_step(
     self,
-    dataloader,
-    history,
-    stats,
-    epoch
+    hr: torch.Tensor,
+    lr: torch.Tensor,
+    debug: bool = True,
 ):
     """
-    Train for one epoch.
+    Perform one diffusion optimization step.
 
     Parameters
     ----------
-    dataloader
+    hr : [B,1,D,H,W]
+
+    lr : [B,1,D,H,W]
 
     Returns
     -------
     dict
-        Epoch statistics.
     """
-    
-    running = {
 
-    "loss": 0.0,
+    ########################################################
+    # Device
+    ########################################################
 
-    "diffusion": 0.0,
+    hr = hr.to(self.device)
+    lr = lr.to(self.device)
 
-    "reconstruction": 0.0,
+    ########################################################
+    # Encode
+    ########################################################
 
-    "residual": 0.0,
+    with torch.no_grad():
+
+        encoded = self._encode(hr, lr)
+
+    ########################################################
+    # Forward diffusion
+    ########################################################
+
+    outputs = self._forward(encoded)
+
+    ########################################################
+    # Loss
+    ########################################################
+
+    losses = self._compute_loss(outputs)
+
+    ########################################################
+    # Optimizer
+    ########################################################
+
+    # self._optimizer_step(losses["total"])
+
+    ########################################################
+    # Return
+    ########################################################
+
+    result = {
+
+        "loss": losses["total"],
+
+        "losses": losses,
+
+        "timestep": outputs["t"],
+
+        "v_pred": outputs["v_pred"],
+
+        "v_target": outputs["v_target"],
+
+        "x0_pred": outputs["x0_pred"],
+
+        "z_res": outputs["z_res"],
+
+        "z_lr": outputs["z_lr"],
 
     }
 
+    if debug:
+
+        result.update({
+
+            "z_hr": outputs["z_hr"],
+
+            "z_noisy": outputs["z_noisy"],
+
+            "noise": outputs["noise"],
+
+            "alpha_bar": outputs["alpha_bar"],
+
+        })
+
+    return result
+
+def _encode(self, hr, lr):
+
+    z_hr, w_e2 = self.ae.encode(hr)
+    z_lr, _ = self.ae.encode(lr)
+    z_lr = F.interpolate(
+    z_lr,
+    size=z_hr.shape[2:],
+    mode="trilinear",
+    align_corners=False,
+)
+    z_res = z_hr - z_lr
+    encoded = {
+        "z_hr": z_hr,
+
+        "z_lr": z_lr,
+
+        "z_res": z_res,
+
+        "w_e2": w_e2,}
     
-    epoch_stats = {
+    return encoded 
 
-    "z_hr_std": 0.0,
-    "z_lr_std": 0.0,
-    "z_res_std": 0.0,
-    "noise_std": 0.0,
-    "z_noisy_std": 0.0,
-    "v_target_std": 0.0,
-    "v_pred_std": 0.0,
-    "x0_pred_std": 0.0,
+    
 
-}
+def _forward(self, encoded):
 
+    z_hr = encoded["z_hr"]
+    z_lr = encoded["z_lr"]
+    z_res = encoded["z_res"]
+    w_e2 = encoded["w_e2"]
 
-    num_batch = 0
-     ##########################################################
-    # Train mode
-    ##########################################################
+    ####################################################
+    # timestep
+    ####################################################
 
-    self.unet.train()
-
-    if hasattr(self, "adapter"):
-        self.adapter.train()
-
-    ##########################################################
-    # Reset logger
-    ##########################################################
-
-    # self.logger.running.clear()
-
-    ##########################################################
-    # Optimizer
-    ##########################################################
-
-    self.optimizer.zero_grad(set_to_none=True)
-
-    ##########################################################
-    # Progress bar
-    ##########################################################
-
-    pbar = tqdm(
-
-        enumerate(dataloader),
-
-        total=len(dataloader),
-
-        leave=False,
-
-        desc="Training",
-
+    t = self.sample_timesteps(
+        z_hr.shape[0]
     )
 
-    ##########################################################
-    # Loop
-    ##########################################################
+    ####################################################
+    # noise
+    ####################################################
 
-    for step, batch in pbar:
+    noise = torch.randn_like(z_res)
 
-        ######################################################
-        # Load batch
-        ######################################################
+    z_noisy = self.scheduler.add_noise(
+        z_res,
+        t,
+        noise,
+    )
 
-        
+    ####################################################
+    # target
+    ####################################################
 
-        # print(f"\nStep {step}")
-        # print("batch type:", type(batch))
+    alpha_bar = self.scheduler.alpha_bars[t].view(
+        -1,1,1,1,1
+    )
 
-        # if isinstance(batch, (list, tuple)):
-        #     print("batch length:", len(batch))
-        #     for i, x in enumerate(batch):
-        #         print(i, type(x))
-        #         if torch.is_tensor(x):
-        #             print(x.shape)
-        # else:
-        #     print(batch.shape)
+    v_target = (
+        torch.sqrt(alpha_bar) * noise
+        -
+        torch.sqrt(1-alpha_bar) * z_res
+    )
 
-        hr, lr = batch
+    ####################################################
+    # prediction
+    ####################################################
 
-        # else:
+    with torch.cuda.amp.autocast():
 
-        #     raise ValueError(
-        #         "Expected dataloader to return (hr, lr)"
-        #     )
+        v_pred = self.unet(
 
-        ######################################################
-        # Forward
-        ######################################################
-        
-        outputs = self.train_step(
+            z=z_noisy,
 
-            hr,
+            t=t,
 
-            lr,
+            cond=z_lr,
 
-            debug=False,
+            w_e2=w_e2,
+
+            alpha=self.cfg_scale,
 
         )
+        # print("w_e2:", w_e2 is None)
+        
+        
+        x0_pred = predict_x0(
 
-        ######################################################
-        # Loss
-        ######################################################
-        # print(outputs)
-        loss = outputs["loss"]
-        # print("loss type:", loss.dtype)
-        ######################################################
-        # Backward
-        ######################################################
+            z_noisy,
 
-        loss = loss / self.accum_steps
+            v_pred,
 
-        self.scaler.scale(loss).backward()
+            alpha_bar,
 
-        ######################################################
-        # Optimizer step
-        ######################################################
-
-        if (
-
-            (step + 1) % self.accum_steps == 0
-
-            or
-
-            (step + 1) == len(dataloader)
-
-        ):
-
-            self.scaler.unscale_(
-
-                self.optimizer
-
-            )
-
-            torch.nn.utils.clip_grad_norm_(
-
-                self.unet.parameters(),
-
-                self.grad_clip,
-
-            )
-
-            self.scaler.step(
-
-                self.optimizer
-
-            )
-
-            self.scaler.update()
-
-            self.optimizer.zero_grad(
-
-                set_to_none=True
-
-            )
-
-            # if self.scheduler is not None:
-
-            #     self.scheduler.step()
-
-            if self.ema is not None:
-
-                self.ema.update(
-
-                    self.unet
-
-                )
-
-        ######################################################
-        # Logger
-        ######################################################
-
-        # self.logger.update(
-
-        #      **outputs["losses"]
-
-        # )
-
-        ######################################################
-        # Progress bar
-        ######################################################
-
-        pbar.set_postfix(
-
-          loss=f"{outputs['loss'].item():.4f}",
-
-          mse=f"{outputs['losses']['mse'].item():.4f}",
-
-          recon=f"{outputs['losses']['recon'].item():.4f}",
-
-          res=f"{outputs['losses']['res'].item():.4f}",
-          
-          perc=f"{outputs['losses']['perc'].item():.4f}"
         )
-        running["loss"] += outputs["loss"].item()
+    # print("v_pred :", v_pred.std())
+    # print("v_target :", v_target.std())
+    # print("x0_pred :", x0_pred.std())
+    # print("z_res :", z_res.std())
+    # print("z_hr :", z_hr.std())
+    # print("z_lr :", z_lr.std())
+    
+    return {
 
-        running["diffusion"] += outputs["losses"]["mse"].item()
+        "z_hr": z_hr,
+
+        "z_lr": z_lr,
+
+        "z_res": z_res,
+
+        "w_e2": w_e2,
+
+        "t": t,
+
+        "noise": noise,
+
+        "alpha_bar": alpha_bar,
+
+        "z_noisy": z_noisy,
+
+        "v_target": v_target,
+
+        "v_pred": v_pred,
+
+        "x0_pred": x0_pred,
+
+    }
+
+def _compute_loss(self, outputs):
+    
+    return compute_losses(
         
-        running["reconstruction"] += outputs["losses"]["recon"].item()
-        
-        running["residual"] += outputs["losses"]["res"].item()
+        v_pred=outputs["v_pred"],
 
-        epoch_stats["z_hr_std"] += outputs["z_hr"].std().item()
-        epoch_stats["z_lr_std"] += outputs["z_lr"].std().item()
-        epoch_stats["z_res_std"] += outputs["z_res"].std().item()
-        epoch_stats["noise_std"] += outputs["noise"].std().item()
-        epoch_stats["z_noisy_std"] += outputs["z_noisy"].std().item()
-        epoch_stats["v_target_std"] += outputs["v_target"].std().item()
-        epoch_stats["v_pred_std"] += outputs["v_pred"].std().item()
-        epoch_stats["x0_pred_std"] += outputs["x0_pred"].std().item()
-        num_batch += 1
+        v_target=outputs["v_target"],
 
+        x0_pred=outputs["x0_pred"],
 
-        
-    
-    ##########################################################
-    # Finish epoch
-    ##########################################################
-    n = len(dataloader)
-    
-    for k in running:
-        running[k] /= n
-    for key in epoch_stats:
-        epoch_stats[key] /= num_batch
-    stats["z_hr_std"].append(outputs["z_hr"].std().item())
+        residual_gt=outputs["z_res"],
 
-    stats["z_lr_std"].append(outputs["z_lr"].std().item())
-    
-    stats["z_res_std"].append(outputs["z_res"].std().item())
-    
-    stats["x0_pred_std"].append(outputs["x0_pred"].std().item())
-    
-    stats["noise_std"].append(outputs["noise"].std().item())
-    
-    stats["z_noisy_std"].append(outputs["z_noisy"].std().item())
+        z_hr = outputs["z_hr"],
 
-    stats["v_target_std"].append(outputs["v_target"].std().item())
-    
-    stats["v_pred_std"].append(outputs["v_pred"].std().item())
-    stats["v_ratio"].append(
-        epoch_stats["v_pred_std"] /
-        (epoch_stats["v_target_std"] + 1e-8)
     )
-    stats["residual_ratio"].append(
-        epoch_stats["z_res_std"] /
-        (epoch_stats["noise_std"] + 1e-8)
-    )
-    history["epoch"].append(epoch + 1)
 
-    history["loss"].append(running["loss"])
-    
-    history["diffusion"].append(running["diffusion"])
-    
-    history["reconstruction"].append(running["reconstruction"])
-    
-    history["residual"].append(running["residual"])
-    return running, history, stats
-    # epoch_stats = self.logger.end_epoch()
+# def _optimizer_step(self, loss):
 
-    # return epoch_stats
+#     self.optimizer.zero_grad(set_to_none=True)
+
+#     self.scaler.scale(loss).backward()
+
+#     self.scaler.unscale_(self.optimizer)
+
+#     torch.nn.utils.clip_grad_norm_(
+
+#         self.unet.parameters(),
+
+#         1.0,
+
+#     )
+
+#     self.scaler.step(self.optimizer)
+
+#     self.scaler.update()
+
+#     self.ema.update(self.unet)
