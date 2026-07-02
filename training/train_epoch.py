@@ -18,6 +18,7 @@ def train_epoch(
     dict
         Epoch statistics.
     """
+    
     running = {
 
     "loss": 0.0,
@@ -213,7 +214,17 @@ def train_epoch(
         running["reconstruction"] += outputs["losses"]["recon"].item()
         
         running["residual"] += outputs["losses"]["res"].item()
+
+
+        history["epoch"].append(epoch + 1)
+
+        history["loss"].append(train_stats["loss"])
         
+        history["diffusion"].append(train_stats["diffusion"])
+        
+        history["reconstruction"].append(train_stats["reconstruction"])
+        
+        history["residual"].append(train_stats["residual"])
     ##########################################################
     # Finish epoch
     ##########################################################
@@ -222,7 +233,7 @@ def train_epoch(
     for k in running:
         running[k] /= n
     
-    return running
+    return running, history
     # epoch_stats = self.logger.end_epoch()
 
     # return epoch_stats
