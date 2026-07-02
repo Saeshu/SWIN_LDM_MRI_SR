@@ -31,7 +31,44 @@ def fit(
 
     "residual": [],
 
-}
+} 
+    stats = {
+
+    # --------------------------------------------------
+    # Latent statistics
+    # --------------------------------------------------
+
+    "z_hr_std": [],
+
+    "z_lr_std": [],
+
+    "z_res_std": [],
+
+    "z_noisy_std": [],
+    
+    # --------------------------------------------------
+    # Noise / prediction statistics
+    # --------------------------------------------------
+
+    "noise_std": [],
+
+    "v_target_std": [],
+
+    "v_pred_std": [],
+
+    "x0_pred_std": [],
+
+    # --------------------------------------------------
+    # Useful ratios
+    # --------------------------------------------------
+
+    "v_ratio": [],          # v_pred_std / v_target_std
+
+    "residual_ratio": [],   # z_res_std / noise_std
+    }
+    # df = pd.read_csv("baseline_losses.csv")
+    
+    # history = df.to_dict("list")
     ##########################################################
     # Best validation loss
     ##########################################################
@@ -51,10 +88,13 @@ def fit(
         ######################################################
         # Train
         ######################################################
+        
 
-        train_stats, train_history = self.train_epoch(train_loader, history)
+        train_stats, train_history, train_stats = self.train_epoch(train_loader, history, stats, epoch)
+    
         history = train_history
-        if (epoch + 1) % 5 == 0:      # Change to 5 or 10 later
+        stats = train_stats
+        if (epoch + 1) % 10 == 0:      # Change to 5 or 10 later
 
             print("\nGenerating sample...\n")
         
@@ -77,7 +117,7 @@ def fit(
                 title=f"Epoch {epoch+1}",
         
             )
-            
+        if (epoch + 1) % 25 == 0: 
             torch.save(
             {
                 "epoch": epoch,
@@ -85,7 +125,7 @@ def fit(
                 "ema": self.ema.ema_model.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
             },
-            f"/workspace/ckpt/sample_epoch_{epoch+1}.pt",
+            f"/workspace/ckpt/sample_overfit_epoch_{epoch+1}.pt",
             )
         ######################################################
         # Validation
@@ -167,7 +207,7 @@ def fit(
     print("\nTraining complete.")
     df = pd.DataFrame(history)
         
-    df.to_csv("baseline_losses.csv", index=False)
+    df.to_csv("overfit_baseline_losses.csv", index=False)
     
     print(df.tail())
     # return self.logger.history
