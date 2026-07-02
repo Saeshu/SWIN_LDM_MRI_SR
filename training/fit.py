@@ -18,19 +18,7 @@ def fit(
     start_epoch
     """
     
-    history = {
-
-    "epoch": [],
-
-    "loss": [],
-
-    "diffusion": [],
-
-    "reconstruction": [],
-
-    "residual": [],
-
-}
+   
     ##########################################################
     # Best validation loss
     ##########################################################
