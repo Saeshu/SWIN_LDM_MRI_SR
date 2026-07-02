@@ -5,6 +5,7 @@ import torch
 def train_epoch(
     self,
     dataloader,
+    history
 ):
     """
     Train for one epoch.
@@ -31,20 +32,7 @@ def train_epoch(
 
     }
 
-    history = {
-
-    "epoch": [],
-
-    "loss": [],
-
-    "diffusion": [],
-
-    "reconstruction": [],
-
-    "residual": [],
-
-}
-    ##########################################################
+     ##########################################################
     # Train mode
     ##########################################################
 
