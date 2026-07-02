@@ -53,15 +53,7 @@ def fit(
         ######################################################
 
         train_stats, train_history = self.train_epoch(train_loader, history)
-        history["epoch"].append(train_history["epoch"])
-
-        history["loss"].append(train_history["loss"])
-        
-        history["diffusion"].append(train_history["diffusion"])
-        
-        history["reconstruction"].append(train_history["reconstruction"])
-        
-        history["residual"].append(train_history["residual"])
+        history = train_history
         if (epoch + 1) % 5 == 0:      # Change to 5 or 10 later
 
             print("\nGenerating sample...\n")
