@@ -1,53 +1,21 @@
 import torch
 
-
 @torch.no_grad()
 def sample_latent_ema(
     ema,
     noise_sched,
     cond,
+    w_e2,
     device,
     guidance_scale=1.5,
     debug=False,
 ):
-    """
-    Sample latent residual using EMA model.
-
-    Parameters
-    ----------
-    ema
-        EMA wrapper.
-
-    noise_sched
-        Noise scheduler.
-
-    cond
-        Encoded LR latent (already upsampled).
-
-    Returns
-    -------
-    dict
-
-        latent      : final SR latent
-
-        residual    : predicted residual
-
-        contractions: norm contraction curve
-    """
 
     ema.ema_model.eval()
 
-    ############################################################
-    # Device
-    ############################################################
-
     cond = cond.to(device)
-
-    alpha_bars = noise_sched.alpha_bars.to(device)
-
-    ############################################################
-    # Initial residual noise
-    ############################################################
+    if w_e2 is not None:
+        w_e2 = w_e2.to(device)
 
     z = torch.randn_like(cond)
 
@@ -55,9 +23,7 @@ def sample_latent_ema(
 
     T = noise_sched.num_timesteps
 
-    ############################################################
-    # Reverse diffusion
-    ############################################################
+    x0_pred = None
 
     for t in reversed(range(T)):
 
@@ -70,281 +36,104 @@ def sample_latent_ema(
             dtype=torch.long,
         )
 
-        ########################################################
+        ####################################################
         # Predict v
-        ########################################################
+        ####################################################
 
-        with torch.amp.autocast("cuda"):
+        with torch.cuda.amp.autocast():
 
             if guidance_scale == 1.0:
 
                 v_pred = ema.ema_model(
-
-                    z,
-
-                    t_tensor,
-
+                    z=z,
+                    t=t_tensor,
                     cond=cond,
-
+                    w_e2=w_e2,
                     alpha=1.0,
-
                 )
 
             else:
 
                 v_uncond = ema.ema_model(
-
-                    z,
-
-                    t_tensor,
-
+                    z=z,
+                    t=t_tensor,
                     cond=None,
-
+                    w_e2=None,
                     alpha=1.0,
-
                 )
 
                 v_cond = ema.ema_model(
-
-                    z,
-
-                    t_tensor,
-
+                    z=z,
+                    t=t_tensor,
                     cond=cond,
-
+                    w_e2=w_e2,
                     alpha=1.0,
-
                 )
 
-                v_pred = (
+                v_pred = v_uncond + guidance_scale * (v_cond - v_uncond)
 
-                    v_uncond
+            v_pred = torch.clamp(v_pred, -4, 4)
 
-                    +
+        ####################################################
+        # Save x0 for visualization
+        ####################################################
 
-                    guidance_scale
-
-                    *
-
-                    (v_cond - v_uncond)
-
-                )
-
-            v_pred = torch.clamp(
-
-                v_pred,
-
-                -4,
-
-                4,
-
-            )
-
-        ########################################################
-        # Alpha
-        ########################################################
-
-        alpha_bar_t = alpha_bars[t]
-
-        alpha_bar_t = torch.clamp(
-
-            alpha_bar_t,
-
-            1e-5,
-
-            1 - 1e-5,
-
+        alpha_bar = noise_sched.alpha_bars[t].to(device).view(
+            1,1,1,1,1
         )
-
-        alpha_bar_t = alpha_bar_t.view(
-
-            1,
-
-            1,
-
-            1,
-
-            1,
-
-            1,
-
-        )
-
-        ########################################################
-        # v -> eps
-        ########################################################
-
-        eps = (
-
-            torch.sqrt(alpha_bar_t) * v_pred
-
-            +
-
-            torch.sqrt(1 - alpha_bar_t) * z
-
-        )
-
-        ########################################################
-        # Predict residual
-        ########################################################
 
         x0_pred = (
-
             z
-
             -
+            torch.sqrt(1-alpha_bar) * v_pred
+        ) / torch.sqrt(alpha_bar)
 
-            torch.sqrt(1 - alpha_bar_t) * eps
+        ####################################################
+        # Scheduler handles reverse diffusion
+        ####################################################
 
-        ) / torch.sqrt(alpha_bar_t)
-
-        x0_pred = torch.clamp(
-
-            x0_pred,
-
-            -1,
-
-            1,
-
+        z = noise_sched.step(
+            z,
+            t_tensor,
+            v_pred,
         )
 
-        ########################################################
-        # Previous alpha
-        ########################################################
-
-        if t > 0:
-
-            alpha_bar_prev = alpha_bars[t - 1]
-
-        else:
-
-            alpha_bar_prev = torch.tensor(
-
-                1.0,
-
-                device=device,
-
-            )
-
-        alpha_bar_prev = alpha_bar_prev.view(
-
-            1,
-
-            1,
-
-            1,
-
-            1,
-
-            1,
-
-        )
-
-        ########################################################
-        # DDIM update
-        ########################################################
-
-        z = (
-
-            torch.sqrt(alpha_bar_prev) * x0_pred
-
-            +
-
-            torch.sqrt(1 - alpha_bar_prev) * eps
-
-        )
-
-        ########################################################
+        ####################################################
         # Diagnostics
-        ########################################################
+        ####################################################
 
         contraction = (
-
             torch.norm(z)
-
             /
-
-            (torch.norm(z_prev) + 1e-8)
-
+            (torch.norm(z_prev)+1e-8)
         )
 
-        contractions.append(
+        contractions.append(contraction.item())
 
-            contraction.item()
-
-        )
-
-        if debug and (t % 10 == 0):
+        if debug and t % 10 == 0:
 
             print(
-
-                f"t={t:02d} | "
-
-                f"z std={z.std():.4f} | "
-
-                f"x0 std={x0_pred.std():.4f}"
-
+                f"t={t:02d}"
+                f" | latent std={z.std():.4f}"
+                f" | x0 std={x0_pred.std():.4f}"
             )
 
-        if not torch.isfinite(z).all():
-
-            print(
-
-                f"NaNs detected at t={t}"
-
-            )
-
-            break
-
-    ############################################################
+    ########################################################
     # Residual -> SR latent
-    ############################################################
+    ########################################################
 
-    z_res_pred = x0_pred
+    z_sr = cond + x0_pred
 
-    z_sr = cond + z_res_pred
+    ########################################################
 
-    ############################################################
-    # Statistics
-    ############################################################
-
-    mean_abs = torch.mean(
-
-        torch.abs(z_sr)
-
-    ).item()
-
-    print()
-
-    print("=" * 60)
-
-    print("Sampling statistics")
-
-    print("=" * 60)
-
-    print(f"|latent| mean : {mean_abs:.4f}")
-
-    print(f"Max contraction : {max(contractions):.4f}")
-
-    print(
-
-        f"Mean contraction: "
-
-        f"{sum(contractions)/len(contractions):.4f}"
-
-    )
-
-    print("=" * 60)
-
-    ############################################################
-    # Return
-    ############################################################
+    print(f"Mean |latent| : {z_sr.abs().mean():.4f}")
+    print(f"Mean contraction : {sum(contractions)/len(contractions):.4f}")
 
     return {
 
         "latent": z_sr,
 
-        "residual": z_res_pred,
+        "residual": x0_pred,
 
         "contractions": contractions,
 
