@@ -19,7 +19,19 @@ def fit(
     start_epoch
     """
     
-   
+    history = {
+
+    "epoch": [],
+
+    "loss": [],
+
+    "diffusion": [],
+
+    "reconstruction": [],
+
+    "residual": [],
+
+}
     ##########################################################
     # Best validation loss
     ##########################################################
@@ -41,6 +53,15 @@ def fit(
         ######################################################
 
         train_stats, train_history = self.train_epoch(train_loader, history)
+        history["epoch"].append(train_history["epoch"])
+
+        history["loss"].append(train_history["loss"])
+        
+        history["diffusion"].append(train_history["diffusion"])
+        
+        history["reconstruction"].append(train_history["reconstruction"])
+        
+        history["residual"].append(train_history["residual"])
         if (epoch + 1) % 5 == 0:      # Change to 5 or 10 later
 
             print("\nGenerating sample...\n")
@@ -103,7 +124,7 @@ def fit(
             print(f"{key:25s}: {value:.5f}")
 
         
-
+            
         
         # print("\nValidation")
 
@@ -152,7 +173,7 @@ def fit(
     ##########################################################
 
     print("\nTraining complete.")
-    df = pd.DataFrame(train_history)
+    df = pd.DataFrame(history)
         
     df.to_csv("baseline_losses.csv", index=False)
     
