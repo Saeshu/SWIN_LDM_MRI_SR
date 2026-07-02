@@ -5,7 +5,9 @@ import torch
 def train_epoch(
     self,
     dataloader,
-    history
+    history,
+    stats,
+    epoch
 ):
     """
     Train for one epoch.
@@ -32,6 +34,22 @@ def train_epoch(
 
     }
 
+    
+    epoch_stats = {
+
+    "z_hr_std": 0.0,
+    "z_lr_std": 0.0,
+    "z_res_std": 0.0,
+    "noise_std": 0.0,
+    "z_noisy_std": 0.0,
+    "v_target_std": 0.0,
+    "v_pred_std": 0.0,
+    "x0_pred_std": 0.0,
+
+}
+
+
+    num_batch = 0
      ##########################################################
     # Train mode
     ##########################################################
@@ -118,7 +136,7 @@ def train_epoch(
         ######################################################
         # Loss
         ######################################################
-
+        # print(outputs)
         loss = outputs["loss"]
         # print("loss type:", loss.dtype)
         ######################################################
@@ -217,25 +235,61 @@ def train_epoch(
         
         running["residual"] += outputs["losses"]["res"].item()
 
+        epoch_stats["z_hr_std"] += outputs["z_hr"].std().item()
+        epoch_stats["z_lr_std"] += outputs["z_lr"].std().item()
+        epoch_stats["z_res_std"] += outputs["z_res"].std().item()
+        epoch_stats["noise_std"] += outputs["noise"].std().item()
+        epoch_stats["z_noisy_std"] += outputs["z_noisy"].std().item()
+        epoch_stats["v_target_std"] += outputs["v_target"].std().item()
+        epoch_stats["v_pred_std"] += outputs["v_pred"].std().item()
+        epoch_stats["x0_pred_std"] += outputs["x0_pred"].std().item()
+        num_batch += 1
 
-        history["epoch"].append(epoch + 1)
 
-        history["loss"].append(train_stats["loss"])
         
-        history["diffusion"].append(train_stats["diffusion"])
-        
-        history["reconstruction"].append(train_stats["reconstruction"])
-        
-        history["residual"].append(train_stats["residual"])
+    
     ##########################################################
     # Finish epoch
     ##########################################################
     n = len(dataloader)
-
+    
     for k in running:
         running[k] /= n
+    for key in epoch_stats:
+        epoch_stats[key] /= num_batch
+    stats["z_hr_std"].append(outputs["z_hr"].std().item())
+
+    stats["z_lr_std"].append(outputs["z_lr"].std().item())
     
-    return running, history
+    stats["z_res_std"].append(outputs["z_res"].std().item())
+    
+    stats["x0_pred_std"].append(outputs["x0_pred"].std().item())
+    
+    stats["noise_std"].append(outputs["noise"].std().item())
+    
+    stats["z_noisy_std"].append(outputs["z_noisy"].std().item())
+
+    stats["v_target_std"].append(outputs["v_target"].std().item())
+    
+    stats["v_pred_std"].append(outputs["v_pred"].std().item())
+    stats["v_ratio"].append(
+        epoch_stats["v_pred_std"] /
+        (epoch_stats["v_target_std"] + 1e-8)
+    )
+    stats["residual_ratio"].append(
+        epoch_stats["z_res_std"] /
+        (epoch_stats["noise_std"] + 1e-8)
+    )
+    history["epoch"].append(epoch + 1)
+
+    history["loss"].append(running["loss"])
+    
+    history["diffusion"].append(running["diffusion"])
+    
+    history["reconstruction"].append(running["reconstruction"])
+    
+    history["residual"].append(running["residual"])
+    return running, history, stats
     # epoch_stats = self.logger.end_epoch()
 
     # return epoch_stats
