@@ -116,10 +116,16 @@ class ResBlock3D(nn.Module):
         self.norm = nn.GroupNorm(8, channels)
 
     def forward(self, x, t_emb):
-        h = self.norm(x)
-        h = F.silu(self.conv1(h))
+        h = self.norm1(x)
+        h = F.silu(h)
+        h = self.conv1(h)
+        
         h = h + self.time_mlp(t_emb)
-        h = F.silu(self.conv2(h))
+        
+        h = self.norm2(h)
+        h = F.silu(h)
+        h = self.conv2(h)
+
         return x + h
 
 class ConditionalEpsUNet3D(nn.Module):
