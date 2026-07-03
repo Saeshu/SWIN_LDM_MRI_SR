@@ -72,7 +72,7 @@ def sample_latent_ema(
 
                 v_pred = v_uncond + guidance_scale * (v_cond - v_uncond)
 
-            v_pred = torch.clamp(v_pred, -4, 4)
+            # v_pred = torch.clamp(v_pred, -4, 4)
 
         ####################################################
         # Save x0 for visualization
@@ -83,10 +83,10 @@ def sample_latent_ema(
         )
 
         x0_pred = (
-            z
+            torch.sqrt(alpha_bar) * z
             -
-            torch.sqrt(1-alpha_bar) * v_pred
-        ) / torch.sqrt(alpha_bar)
+            torch.sqrt(1.0 - alpha_bar) * v_pred
+        )
 
         ####################################################
         # Scheduler handles reverse diffusion
