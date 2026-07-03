@@ -133,21 +133,16 @@ class DiffusionTrainer:
         v_pred,
         alpha_bar,
     ):
-
+    
         return (
-
-            z_t
-
+    
+            torch.sqrt(alpha_bar) * z_t
+    
             -
-
-            torch.sqrt(
-                1 - alpha_bar
-            ) * v_pred
-
-        ) / torch.sqrt(
-            alpha_bar
+    
+            torch.sqrt(1.0 - alpha_bar) * v_pred
+    
         )
-
     ############################################################
     # Internal functions
     ############################################################
@@ -229,16 +224,25 @@ class DiffusionTrainer:
         # timestep
         ####################################################
     
-        t = self.sample_timesteps(
-            z_res.shape[0]
-        )
-    
+        # t = self.sample_timesteps(
+        #     batch_size=z_hr.shape[0],
+        #     epoch=self.current_epoch,
+        #     total_epochs=self.total_epochs,
+        # )
+        t = torch.full(
+            (z_hr.shape[0],),
+            0,
+            device=z_hr.device,
+            dtype=torch.long,
+                )
         ####################################################
         # noise
         ####################################################
         
         noise = torch.randn_like(z_res)
-    
+        # print("t:", t)
+        # print("max t:", t.max().item())
+        # print("num_timesteps:", self.noise_scheduler.num_timesteps)
         z_noisy = self.noise_scheduler.add_noise(
             z_res,
             t,
@@ -310,8 +314,44 @@ class DiffusionTrainer:
     
         ############################################################
     
-    
+    def sample_timesteps(self, batch_size, epoch=None, total_epochs=None):
 
+        if epoch is None or total_epochs is None:
+            return torch.randint(
+                0,
+                self.noise_scheduler.num_timesteps,
+                (batch_size,),
+                device=self.device,
+            )
+    
+        progress = epoch / total_epochs
+    
+        min_t = int(
+            (1.0 - progress)
+            * (self.noise_scheduler.num_timesteps - 1)
+        )
+    
+        curriculum_prob = 0.8
+        
+        if torch.rand(1).item() < curriculum_prob:
+    
+            return torch.randint(
+                min_t,
+                self.noise_scheduler.num_timesteps,
+                (batch_size,),
+                device=self.device,
+            )
+    
+        else:
+    
+            return torch.randint(
+                0,
+                self.noise_scheduler.num_timesteps,
+                (batch_size,),
+                device=self.device,
+            )
+
+       
     def _compute_loss(
         ae,
         outputs,
