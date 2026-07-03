@@ -47,8 +47,8 @@ def train_epoch(
     "x0_pred_std": 0.0,
 
 }
-
-
+    stats = stats
+    history = history
     num_batch = 0
      ##########################################################
     # Train mode
@@ -147,6 +147,14 @@ def train_epoch(
 
         self.scaler.scale(loss).backward()
 
+        # for name, p in self.unet.named_parameters():
+        #     if p.grad is None:
+        #         print(name, "NO GRAD")
+        #     else:
+        #         print(
+        #             name,
+        #             p.grad.abs().mean().item()
+        #         )
         ######################################################
         # Optimizer step
         ######################################################
