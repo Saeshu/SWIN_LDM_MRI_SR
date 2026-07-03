@@ -110,10 +110,36 @@ class TimeMLP(nn.Module):
 class ResBlock3D(nn.Module):
     def __init__(self, channels, tdim):
         super().__init__()
-        self.conv1 = nn.Conv3d(channels, channels, 3, padding=1)
-        self.conv2 = nn.Conv3d(channels, channels, 3, padding=1)
+
+        self.norm1 = nn.GroupNorm(8, channels)
+        self.norm2 = nn.GroupNorm(8, channels)
+
+        self.conv1 = nn.Conv3d(
+            channels,
+            channels,
+            kernel_size=3,
+            padding=1,
+        )
+
+        self.conv2 = nn.Conv3d(
+            channels,
+            channels,
+            kernel_size=3,
+            padding=1,
+        )
+
+        ####################################################
+        # Zero init final conv (diffusion trick)
+        ####################################################
+
+        nn.init.zeros_(self.conv2.weight)
+
+        if self.conv2.bias is not None:
+            nn.init.zeros_(self.conv2.bias)
+
+        ####################################################
+
         self.time_mlp = TimeMLP(tdim, channels)
-        self.norm = nn.GroupNorm(8, channels)
 
     def forward(self, x, t_emb):
         h = self.norm1(x)
