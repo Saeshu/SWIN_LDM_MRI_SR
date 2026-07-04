@@ -248,7 +248,7 @@ class DiffusionTrainer:
             t,
             noise,
         )
-    
+        
         ####################################################
         # target
         ####################################################
@@ -263,7 +263,9 @@ class DiffusionTrainer:
         alpha_bar = self.noise_scheduler.alpha_bars[t].view(
             -1, 1, 1, 1, 1
         )
-    
+        
+        sqrt_alpha_bar = torch.sqrt(alpha_bar)
+        sqrt_one_minus = torch.sqrt(1.0 - alpha_bar)
         v_target = (
             torch.sqrt(alpha_bar) * noise
             - torch.sqrt(1 - alpha_bar) * z_res
@@ -275,25 +277,26 @@ class DiffusionTrainer:
     
         with torch.cuda.amp.autocast():
     
-            v_pred = self.unet(
+            x0_pred = self.unet(
                 z=z_noisy,
                 t=t,
                 cond=z_lr,
                 w_e2=w_e2,
                 alpha=self.cfg_scale,
             )
-    
-            x0_pred = self.predict_x0(
-                z_noisy,
-                v_pred,
-                alpha_bar,
+
+            v_from_x0 = (
+                sqrt_alpha_bar * noise
+                - sqrt_one_minus * x0_pred
             )
+
+            
     
         return {
 
           **encoded,
 
-          "v_pred": v_pred,
+          "v_pred": v_from_x0,
 
           "v_target": v_target,
 
@@ -380,20 +383,21 @@ class DiffusionTrainer:
         v_pred=outputs["v_pred"]
 
         v_target=outputs["v_target"]
-
+        
         with torch.cuda.amp.autocast():
             mse_loss = F.mse_loss(
-                v_pred,
-                v_target,
+                x0_pred,
+                z_res,
             )
     
             ####################################################
             # Residual loss
             ####################################################
-    
-            res_loss = F.l1_loss(
-                x0_pred,
-                z_res,
+            
+            
+            v_loss = F.l1_loss(
+                v_pred,
+                v_target,
             )
     
             ####################################################
@@ -497,11 +501,11 @@ class DiffusionTrainer:
     
                 +
     
-                0.5 * res_loss
+                0.1 * v_loss
     
                 +
     
-                0.5 * recon_loss
+                0.01 * recon_loss
     
                 +
     
@@ -521,7 +525,7 @@ class DiffusionTrainer:
 
             "recon": recon_loss,
 
-            "res": res_loss,
+            "res": v_loss,
 
             "perc": perc_loss,
 
