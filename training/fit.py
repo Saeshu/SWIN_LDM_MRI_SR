@@ -90,7 +90,7 @@ def fit(
         ######################################################
         
 
-        train_stats, train_history, train_stats = self.train_epoch(train_loader, history, stats, epoch)
+        losses, train_history, train_stats = self.train_epoch(train_loader, history, stats, epoch)
     
         history = train_history
         stats = train_stats
@@ -125,7 +125,7 @@ def fit(
                 "ema": self.ema.ema_model.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
             },
-            f"/workspace/ckpt/sample_overfit_epoch_{epoch+1}.pt",
+            f"/workspace/ckpt/sample_x0_epoch_{epoch+1}.pt",
             )
         ######################################################
         # Validation
@@ -152,8 +152,8 @@ def fit(
 
         print("\nTraining")
 
-        for key, value in train_stats.items():
-            print(f"{key:25s}: {value:.5f}")
+        # for key, value in train_stats.items():
+        #     print(f"{key:25s}: {value:.5f}")
 
         
             
