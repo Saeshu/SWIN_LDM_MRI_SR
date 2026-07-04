@@ -191,7 +191,7 @@ def _forward(self, encoded):
 
     with torch.cuda.amp.autocast():
 
-        v_pred = self.unet(
+        x0_pred = self.unet(
 
             z=z_noisy,
 
@@ -204,18 +204,25 @@ def _forward(self, encoded):
             alpha=self.cfg_scale,
 
         )
+        alpha_bar = outputs["alpha_bar"]   # shape [B,1,1,1,1]
+
+        v_from_x0 = (
+            torch.sqrt(alpha_bar) * noise
+            -
+            torch.sqrt(1.0 - alpha_bar) * x0_pred
+        )
         # print("w_e2:", w_e2 is None)
         
         
-        x0_pred = predict_x0(
+        # x0_pred = predict_x0(
 
-            z_noisy,
+        #     z_noisy,
 
-            v_pred,
+        #     v_pred,
 
-            alpha_bar,
+        #     alpha_bar,
 
-        )
+        # )
     # print("v_pred :", v_pred.std())
     # print("v_target :", v_target.std())
     # print("x0_pred :", x0_pred.std())
@@ -243,7 +250,7 @@ def _forward(self, encoded):
 
         "v_target": v_target,
 
-        "v_pred": v_pred,
+        "v_pred": v_from_x0,
 
         "x0_pred": x0_pred,
 
