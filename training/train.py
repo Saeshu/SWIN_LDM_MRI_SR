@@ -104,25 +104,13 @@ class DiffusionTrainer:
     # Utilities
     ############################################################
 
-    def sample_timesteps(
-        self,
-        batch_size,
-    ):
+    def sample_timesteps(self, batch_size):
 
-        T = self.noise_scheduler.num_timesteps
-
-        u = torch.rand(
-            batch_size,
+        return torch.randint(
+            0,
+            self.noise_scheduler.num_timesteps,
+            (batch_size,),
             device=self.device,
-        )
-
-        t = (
-            (u ** 2) * T
-        ).long()
-
-        return torch.clamp(
-            t,
-            max=T - 1,
         )
 
     ############################################################
