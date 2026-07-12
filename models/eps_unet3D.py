@@ -159,6 +159,7 @@ class ConditionalEpsUNet3D(nn.Module):
         self,
         z_ch,
         cond_ch,
+        alpha_bars
         tdim=128,
         num_timesteps=50,
         use_temporal_suite=True,
