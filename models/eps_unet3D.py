@@ -197,11 +197,22 @@ class ConditionalEpsUNet3D(nn.Module):
 
         # ---- output ----
         self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
+        self.register_buffer(
+            "alpha_bars",
+            alpha_bars.clone()
+        )
 
-    def forward(self, z, t, cond=None, w_e2=None, alpha=1.0):
+    def forward(self, z, t, cond=None, w_e2=None):
 
         t_emb = timestep_embedding(t, self.tdim)
-    
+        alpha_bar = self.alpha_bars[t].view(-1,1,1,1,1)
+
+        sqrt_signal = torch.sqrt(alpha_bar)
+        sqrt_noise = torch.sqrt(1.0 - alpha_bar)
+        
+        gamma = sqrt_noise / (
+            sqrt_signal + sqrt_noise + 1e-8
+        )
         # ---- input conditioning ----
         x = z
         if cond is not None:
@@ -211,7 +222,7 @@ class ConditionalEpsUNet3D(nn.Module):
                 mode="trilinear",
                 align_corners=False
             )
-            x = x + alpha * cond_resized
+            x = x + gamma*cond_resized
     
         # ---- input conv ----
         x1 = self.in_conv(x)
