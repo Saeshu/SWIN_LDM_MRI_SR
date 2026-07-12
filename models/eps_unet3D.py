@@ -159,115 +159,266 @@ class ConditionalEpsUNet3D(nn.Module):
         self,
         z_ch,
         cond_ch,
-        alpha_bars
+        alpha_bars,
         tdim=128,
         num_timesteps=50,
         use_temporal_suite=True,
     ):
         super().__init__()
+
         self.z_ch = z_ch
         self.cond_ch = cond_ch
         self.tdim = tdim
         self.num_timesteps = num_timesteps
         self.use_temporal_suite = use_temporal_suite
-        self.we2_cond = WE2Conditioning(
-            latent_channels=z_ch,
-            num_kernels=5,      # or whatever your encoder outputs
+
+        ####################################################
+        # Diffusion schedule
+        ####################################################
+
+        self.register_buffer(
+            "alpha_bars",
+            alpha_bars.float().clone(),
         )
 
-        self.time_embed = SinusoidalTimeEmbedding(self.tdim)
+        ####################################################
+        # WE2 conditioning
+        ####################################################
 
-        # ---- input ----
-        self.in_conv = nn.Conv3d(z_ch, z_ch, 3, padding=1)
+        self.we2_cond = WE2Conditioning(
+            latent_channels=z_ch,
+            num_kernels=5,
+        )
 
-        # ---- encoder ----
-        self.down = nn.Conv3d(z_ch, z_ch, 4, stride=2, padding=1)
-        self.enc_block = ResBlock3D(z_ch, tdim)
+        ####################################################
+        # Time embedding
+        ####################################################
 
-        # ---- bottleneck ----
-        self.mid_block = ResBlock3D(z_ch, tdim)
+        self.time_embed = SinusoidalTimeEmbedding(tdim)
+
+        ####################################################
+        # Input
+        ####################################################
+
+        self.in_conv = nn.Conv3d(
+            z_ch,
+            z_ch,
+            kernel_size=3,
+            padding=1,
+        )
+
+        ####################################################
+        # Encoder
+        ####################################################
+
+        self.down = nn.Conv3d(
+            z_ch,
+            z_ch,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+        )
+
+        self.enc_block = ResBlock3D(
+            z_ch,
+            tdim,
+        )
+
+        ####################################################
+        # Bottleneck
+        ####################################################
+
+        self.mid_block = ResBlock3D(
+            z_ch,
+            tdim,
+        )
+
+        ####################################################
+        # Optional temporal module
+        ####################################################
 
         if use_temporal_suite:
             self.temporal_suite = TimeGatedConvSuite(z_ch)
         else:
             self.temporal_suite = None
 
-        # ---- decoder ----
-        self.up = nn.ConvTranspose3d(z_ch, z_ch, 4, stride=2, padding=1)
-        self.dec_block = ResBlock3D(z_ch, tdim)
+        ####################################################
+        # Decoder
+        ####################################################
 
-        # ---- output ----
-        self.out = nn.Conv3d(z_ch, z_ch, 3, padding=1)
-        self.register_buffer(
-            "alpha_bars",
-            alpha_bars.clone()
+        self.up = nn.ConvTranspose3d(
+            z_ch,
+            z_ch,
+            kernel_size=4,
+            stride=2,
+            padding=1,
         )
 
-        alpha_bar = self.alpha_bars[t].view(-1,1,1,1,1)
-
-        sqrt_signal = torch.sqrt(alpha_bar)
-        sqrt_noise = torch.sqrt(1.0 - alpha_bar)
-        
-        gamma = sqrt_noise / (
-            sqrt_signal + sqrt_noise + 1e-8
+        self.dec_block = ResBlock3D(
+            z_ch,
+            tdim,
         )
 
-        torch.clamp(gamma, 0.05, 0.95)
+        ####################################################
+        # Output
+        ####################################################
 
-    def forward(self, z, t, cond=None, w_e2=None):
+        self.out = nn.Conv3d(
+            z_ch,
+            z_ch,
+            kernel_size=3,
+            padding=1,
+        )
 
-        t_emb = timestep_embedding(t, self.tdim)
-        
-        # ---- input conditioning ----
+    def forward(
+        self,
+        z,
+        t,
+        cond=None,
+        w_e2=None,
+    ):
+
+        ####################################################
+        # Time embedding
+        ####################################################
+
+        t_emb = timestep_embedding(
+            t,
+            self.tdim,
+        )
+
+        ####################################################
+        # Conditioning strength
+        ####################################################
+
+        alpha_bar = self.alpha_bars[t].view(
+            -1,
+            1,
+            1,
+            1,
+            1,
+        )
+
+        sqrt_signal = alpha_bar.sqrt()
+        sqrt_noise = (1.0 - alpha_bar).sqrt()
+
+        gamma = (
+            sqrt_noise
+            /
+            (
+                sqrt_signal
+                + sqrt_noise
+                + 1e-8
+            )
+        )
+
+        # Optional safety clamp
+        gamma = gamma.clamp(
+            min=0.05,
+            max=0.95,
+        )
+
+        ####################################################
+        # Input conditioning
+        ####################################################
+
         x = z
+
         if cond is not None:
+
             cond_resized = F.interpolate(
                 cond,
                 size=z.shape[2:],
                 mode="trilinear",
-                align_corners=False
+                align_corners=False,
             )
+
             x = x + gamma * cond_resized
-    
-        # ---- input conv ----
+
+        ####################################################
+        # Input conv
+        ####################################################
+
         x1 = self.in_conv(x)
-    
-        # ---- encoder ----
+
+        ####################################################
+        # Encoder
+        ####################################################
+
         x2 = self.down(x1)
-        x2 = self.enc_block(x2, t_emb)
-    
-        # ---- bottleneck (THIS is the real h) ----
-        h = self.mid_block(x2, t_emb)
-    
-        # ---- mid conditioning ----
+
+        x2 = self.enc_block(
+            x2,
+            t_emb,
+        )
+
+        ####################################################
+        # Bottleneck
+        ####################################################
+
+        h = self.mid_block(
+            x2,
+            t_emb,
+        )
+
+        ####################################################
+        # Mid conditioning
+        ####################################################
+
         if cond is not None:
+
             cond_mid = F.interpolate(
                 cond,
                 size=h.shape[2:],
                 mode="trilinear",
-                align_corners=False
+                align_corners=False,
             )
+
             h = h + gamma * cond_mid
-    
-        # ---- 🔥 w_E2 conditioning (PRIMARY place) ----
+
+        ####################################################
+        # WE2 conditioning
+        ####################################################
+
         if w_e2 is not None:
-            h = self.we2_cond(h, w_e2)
-    
-        # ---- optional temporal ----
+            h = self.we2_cond(
+                h,
+                w_e2,
+            )
+
+        ####################################################
+        # Temporal module
+        ####################################################
+
         if self.temporal_suite is not None:
-            h = h + self.temporal_suite(h, t)
-    
-        # ---- decoder ----
+            h = h + self.temporal_suite(
+                h,
+                t,
+            )
+
+        ####################################################
+        # Decoder
+        ####################################################
+
         h = self.up(h)
-    
-        # ---- skip connection ----
+
+        ####################################################
+        # Skip connection
+        ####################################################
+
         h = h + x1
-    
-        # ---- 🔥 optional second refinement ----
-        #if w_e2 is not None:
-            #h = self.we2_cond(h, w_e2)
-    
-        # ---- final block ----
-        h = self.dec_block(h, t_emb)
-    
+
+        ####################################################
+        # Final block
+        ####################################################
+
+        h = self.dec_block(
+            h,
+            t_emb,
+        )
+
+        ####################################################
+        # Output
+        ####################################################
+
         return self.out(h)
