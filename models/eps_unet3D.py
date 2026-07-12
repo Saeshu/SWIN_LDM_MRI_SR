@@ -222,7 +222,7 @@ class ConditionalEpsUNet3D(nn.Module):
                 mode="trilinear",
                 align_corners=False
             )
-            x = x + gamma*cond_resized
+            x = x + gamma * cond_resized
     
         # ---- input conv ----
         x1 = self.in_conv(x)
@@ -242,7 +242,7 @@ class ConditionalEpsUNet3D(nn.Module):
                 mode="trilinear",
                 align_corners=False
             )
-            h = h + alpha * cond_mid
+            h = h + gamma * cond_mid
     
         # ---- 🔥 w_E2 conditioning (PRIMARY place) ----
         if w_e2 is not None:
