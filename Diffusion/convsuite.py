@@ -54,7 +54,7 @@ class LongSliceSuite(nn.Module):
 
 
 ############################################################
-# Time + Anatomy Router
+# Time + Anatomy Aware Routing
 ############################################################
 
 class TimeGatedConvSuite(nn.Module):
@@ -65,7 +65,6 @@ class TimeGatedConvSuite(nn.Module):
         time_dim=128,
         we2_channels=5,
     ):
-
         super().__init__()
 
         ####################################################
@@ -89,12 +88,28 @@ class TimeGatedConvSuite(nn.Module):
         )
 
         ####################################################
-        # Project into same embedding space
+        # Project anatomy embedding
         ####################################################
 
         self.we2_proj = nn.Linear(
             time_dim,
             time_dim,
+        )
+
+        ####################################################
+        # Learn fusion gate
+        ####################################################
+
+        self.gate_fc = nn.Sequential(
+            nn.Linear(
+                2 * time_dim,
+                time_dim,
+            ),
+            nn.SiLU(),
+            nn.Linear(
+                time_dim,
+                time_dim,
+            ),
         )
 
         ####################################################
@@ -140,7 +155,7 @@ class TimeGatedConvSuite(nn.Module):
         te = self.time_embed(t)
 
         ####################################################
-        # w_E2 embedding
+        # Anatomy embedding
         ####################################################
 
         if w_e2 is None:
@@ -165,38 +180,45 @@ class TimeGatedConvSuite(nn.Module):
                 te.shape[0],
                 1,
                 device=te.device,
+                dtype=te.dtype,
             )
 
         else:
 
-            gamma_scalar = gamma.view(
+            gamma_scalar = gamma.reshape(
                 gamma.shape[0],
-                1,
+                -1,
+            ).mean(
+                dim=1,
+                keepdim=True,
             )
 
-        ####################################################
-        # Fuse
-        ####################################################
+        we2_feat = gamma_scalar * we2_feat
 
-        we2_feat = gamma_snr * we2_feat
+        ####################################################
+        # Learn fusion
+        ####################################################
 
         fusion = torch.cat(
-            [te, we2_feat],
+            [
+                te,
+                we2_feat,
+            ],
             dim=-1,
         )
-        
+
         gate = torch.sigmoid(
             self.gate_fc(fusion)
         )
-        
+
         routing_feat = (
             gate * te
             +
-            (1 - gate) * we2_feat
+            (1.0 - gate) * we2_feat
         )
 
         ####################################################
-        # Routing logits
+        # Routing
         ####################################################
 
         logits = self.router(
@@ -214,13 +236,15 @@ class TimeGatedConvSuite(nn.Module):
 
         if expert_mask is not None:
 
-            mask = torch.tensor(
-                expert_mask,
-                device=gates.device,
-                dtype=gates.dtype,
-            )
+            if not torch.is_tensor(expert_mask):
 
-            gates = gates * mask
+                expert_mask = torch.tensor(
+                    expert_mask,
+                    device=gates.device,
+                    dtype=gates.dtype,
+                )
+
+            gates = gates * expert_mask
 
             gates = gates / (
                 gates.sum(
@@ -228,6 +252,14 @@ class TimeGatedConvSuite(nn.Module):
                     keepdim=True,
                 ) + 1e-8
             )
+
+        ####################################################
+        # Return raw gates if requested
+        ####################################################
+
+        if return_gates:
+
+            gate_out = gates.detach()
 
         ####################################################
         # Experts
@@ -238,10 +270,17 @@ class TimeGatedConvSuite(nn.Module):
         long = self.long(x)
 
         ####################################################
-        # Mixture
+        # Broadcast gates
         ####################################################
 
-        gates = gates[..., None, None, None, None]
+        gates = gates.unsqueeze(-1)\
+                     .unsqueeze(-1)\
+                     .unsqueeze(-1)\
+                     .unsqueeze(-1)
+
+        ####################################################
+        # Mixture of experts
+        ####################################################
 
         out = (
             gates[:,0] * spatial
@@ -256,13 +295,7 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
 
         if return_gates:
-            print(gates.mean(dim=0))
-            return (
-                out,
-                gates.squeeze(-1)
-                     .squeeze(-1)
-                     .squeeze(-1)
-                     .squeeze(-1),
-            )
+            print(gate_out.mean(dim=0))
+            return out, gate_out
 
         return out
