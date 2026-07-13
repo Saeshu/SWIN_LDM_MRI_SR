@@ -1,182 +1,268 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
-from models.utils import timestep_embedding
-#from Diffusion.convsuite import TimeGatedConvSuite
 from Diffusion.schedule import SinusoidalTimeEmbedding
-from Diffusion.LinearNoise import NoiseScheduler
+
+
+############################################################
+# Experts
+############################################################
 
 class SpatialSuite(nn.Module):
-  def __init__(self, c):
-      super().__init__()
-      self.net = nn.Sequential(
-          nn.Conv3d(c, c, kernel_size=(3,3,1), padding=(1,1,0)),
-          nn.SiLU(),
-          nn.Conv3d(c, c, kernel_size=(1,3,1), padding=(0,1,0)),
-          nn.SiLU(),
-          nn.Conv3d(c, c, kernel_size=(3,1,1), padding=(1,0,0)),
-      )
+    def __init__(self, c):
+        super().__init__()
 
-  def forward(self, x):
-      return self.net(x)
+        self.net = nn.Sequential(
+            nn.Conv3d(c, c, (3,3,1), padding=(1,1,0)),
+            nn.SiLU(),
+            nn.Conv3d(c, c, (1,3,1), padding=(0,1,0)),
+            nn.SiLU(),
+            nn.Conv3d(c, c, (3,1,1), padding=(1,0,0)),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 
 class MidSliceSuite(nn.Module):
-  def __init__(self, c):
-      super().__init__()
-      self.net = nn.Sequential(
-          nn.Conv3d(c, c, kernel_size=(1,1,3), padding=(0,0,1)),
-          nn.SiLU(),
-          nn.Conv3d(c, c, kernel_size=(1,1,5), padding=(0,0,2)),
-      )
+    def __init__(self, c):
+        super().__init__()
 
-  def forward(self, x):
-      return self.net(x)
+        self.net = nn.Sequential(
+            nn.Conv3d(c, c, (1,1,3), padding=(0,0,1)),
+            nn.SiLU(),
+            nn.Conv3d(c, c, (1,1,5), padding=(0,0,2)),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 
 class LongSliceSuite(nn.Module):
-  def __init__(self, c):
-      super().__init__()
-      self.net = nn.Sequential(
-          nn.Conv3d(c, c, kernel_size=(1,1,7), padding=(0,0,3)),
-          nn.SiLU(),
-          nn.Conv3d(c, c, kernel_size=(1,1,9), padding=(0,0,4)),
-      )
-  def forward(self, x):
-      return self.net(x)
+    def __init__(self, c):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Conv3d(c, c, (1,1,7), padding=(0,0,3)),
+            nn.SiLU(),
+            nn.Conv3d(c, c, (1,1,9), padding=(0,0,4)),
+        )
+
+    def forward(self, x):
+        return self.net(x)
 
 
-
-
+############################################################
+# Time + Anatomy Router
+############################################################
 
 class TimeGatedConvSuite(nn.Module):
-  def __init__(self, channels, time_dim=128):
-      super().__init__()
 
-      self.time_embed = SinusoidalTimeEmbedding(time_dim)
-      self.time_mlp = nn.Sequential(
-          nn.Linear(time_dim, time_dim),
-          nn.SiLU(),
-          nn.Linear(time_dim, 3)  # gates for A, B, C
-      )
+    def __init__(
+        self,
+        channels,
+        time_dim=128,
+        we2_channels=5,
+    ):
 
-      self.spatial = SpatialSuite(channels)
-      self.mid = MidSliceSuite(channels)
-      self.long = LongSliceSuite(channels)
-
-  def forward(
-      self,
-      x,
-      t,
-      expert_mask=None,
-      return_gates=False,
-):
-      """
-      Parameters
-      ----------
-      x : [B,C,D,H,W]
-  
-      t : [B]
-  
-      expert_mask :
-          None      -> normal routing
-  
-          [1,1,1]   -> normal
-  
-          [1,0,1]   -> disable mid
-  
-          [0,1,0]   -> only mid
-  
-      return_gates :
-          return routing probabilities
-      """
-
-    # -------------------------------------------------
-    # Compute routing
-    # -------------------------------------------------
-
-      te = self.time_embed(t)
-
-      logits = self.time_mlp(te)
-
-      gates = torch.softmax(logits, dim=-1)
-
-    
-    # -------------------------------------------------
-    # Optional masking
-    # -------------------------------------------------
-
-      if expert_mask is not None:
-
-          mask = torch.tensor(
-              expert_mask,
-              device=gates.device,
-              dtype=gates.dtype,
-          )
-
-          gates = gates * mask
-
-          # Renormalize
-
-          gates = gates / (
-              gates.sum(
-                  dim=-1,
-                  keepdim=True
-              ) + 1e-8
-          )
-
-      # -------------------------------------------------
-      # Experts
-      # -------------------------------------------------
-
-      spatial = self.spatial(x)
-
-      mid = self.mid(x)
-
-      long = self.long(x)
-
-      # -------------------------------------------------
-      # Broadcast gates
-      # -------------------------------------------------
-
-      gates = gates[..., None, None, None, None]
-
-      out = (
-
-          gates[:,0] * spatial +
-
-          gates[:,1] * mid +
-
-          gates[:,2] * long
-
-      )
-
-      # -------------------------------------------------
-      # Return
-      # -------------------------------------------------
-
-      if return_gates:
-
-          return out, gates.squeeze(-1).squeeze(-1).squeeze(-1).squeeze(-1)
-
-      return out
-
-    
-
-  class BottleneckBlock(nn.Module):
-    def __init__(self, channels):
         super().__init__()
-        self.norm = nn.GroupNorm(8, channels)
-        self.conv = nn.Conv3d(channels, channels, 3, padding=1)
-        self.temporal_suite = TimeGatedConvSuite(channels)
 
-    def forward(self, x, t):
-        h = self.norm(x)
-        h = F.silu(h)
-        h = self.conv(h)
+        ####################################################
+        # Time embedding
+        ####################################################
 
-        # temporal / slice-aware correction
-        h = h + self.temporal_suite(h, t)
+        self.time_embed = SinusoidalTimeEmbedding(time_dim)
 
-        return h
+        ####################################################
+        # Encode w_E2
+        ####################################################
 
+        self.we2_pool = nn.Sequential(
+            nn.AdaptiveAvgPool3d(1),
+            nn.Flatten(),
+            nn.Linear(
+                we2_channels,
+                time_dim,
+            ),
+            nn.SiLU(),
+        )
+
+        ####################################################
+        # Project into same embedding space
+        ####################################################
+
+        self.we2_proj = nn.Linear(
+            time_dim,
+            time_dim,
+        )
+
+        ####################################################
+        # Router
+        ####################################################
+
+        self.router = nn.Sequential(
+            nn.Linear(
+                time_dim,
+                time_dim,
+            ),
+            nn.SiLU(),
+            nn.Linear(
+                time_dim,
+                3,
+            ),
+        )
+
+        ####################################################
+        # Experts
+        ####################################################
+
+        self.spatial = SpatialSuite(channels)
+        self.mid = MidSliceSuite(channels)
+        self.long = LongSliceSuite(channels)
+
+    ########################################################
+
+    def forward(
+        self,
+        x,
+        t,
+        w_e2=None,
+        gamma=None,
+        expert_mask=None,
+        return_gates=False,
+    ):
+
+        ####################################################
+        # Time embedding
+        ####################################################
+
+        te = self.time_embed(t)
+
+        ####################################################
+        # w_E2 embedding
+        ####################################################
+
+        if w_e2 is None:
+
+            we2_feat = torch.zeros_like(te)
+
+        else:
+
+            we2_feat = self.we2_pool(w_e2)
+
+        we2_feat = self.we2_proj(
+            we2_feat,
+        )
+
+        ####################################################
+        # SNR weighting
+        ####################################################
+
+        if gamma is None:
+
+            gamma_scalar = torch.ones(
+                te.shape[0],
+                1,
+                device=te.device,
+            )
+
+        else:
+
+            gamma_scalar = gamma.view(
+                gamma.shape[0],
+                1,
+            )
+
+        ####################################################
+        # Fuse
+        ####################################################
+
+        we2_feat = gamma_snr * we2_feat
+
+        fusion = torch.cat(
+            [te, we2_feat],
+            dim=-1,
+        )
+        
+        gate = torch.sigmoid(
+            self.gate_fc(fusion)
+        )
+        
+        routing_feat = (
+            gate * te
+            +
+            (1 - gate) * we2_feat
+        )
+
+        ####################################################
+        # Routing logits
+        ####################################################
+
+        logits = self.router(
+            routing_feat,
+        )
+
+        gates = torch.softmax(
+            logits,
+            dim=-1,
+        )
+
+        ####################################################
+        # Optional masking
+        ####################################################
+
+        if expert_mask is not None:
+
+            mask = torch.tensor(
+                expert_mask,
+                device=gates.device,
+                dtype=gates.dtype,
+            )
+
+            gates = gates * mask
+
+            gates = gates / (
+                gates.sum(
+                    dim=-1,
+                    keepdim=True,
+                ) + 1e-8
+            )
+
+        ####################################################
+        # Experts
+        ####################################################
+
+        spatial = self.spatial(x)
+        mid = self.mid(x)
+        long = self.long(x)
+
+        ####################################################
+        # Mixture
+        ####################################################
+
+        gates = gates[..., None, None, None, None]
+
+        out = (
+            gates[:,0] * spatial
+            +
+            gates[:,1] * mid
+            +
+            gates[:,2] * long
+        )
+
+        ####################################################
+        # Return
+        ####################################################
+
+        if return_gates:
+            print(gates.mean(dim=0))
+            return (
+                out,
+                gates.squeeze(-1)
+                     .squeeze(-1)
+                     .squeeze(-1)
+                     .squeeze(-1),
+            )
+
+        return out
