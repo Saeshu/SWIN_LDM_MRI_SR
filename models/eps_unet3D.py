@@ -394,8 +394,9 @@ class ConditionalEpsUNet3D(nn.Module):
             h = h + self.temporal_suite(
                 h,
                 t,
+                w_e2=w_e2,
+                gamma=gamma,
             )
-
         ####################################################
         # Decoder
         ####################################################
