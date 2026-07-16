@@ -53,6 +53,73 @@ class LongSliceSuite(nn.Module):
         return self.net(x)
 
 
+class SpatialCrossAttention(nn.Module):
+
+    def __init__(self, channels=64):
+
+        super().__init__()
+
+        self.query = nn.Conv3d(
+            channels,
+            channels,
+            1,
+        )
+
+        self.key = nn.Conv3d(
+            channels,
+            channels,
+            1,
+        )
+
+        self.value = nn.Conv3d(
+            channels,
+            channels,
+            1,
+        )
+
+        self.scale = channels ** -0.5
+
+    def forward(
+        self,
+        anatomy,
+        h,
+    ):
+
+        B,C,D,H,W = anatomy.shape
+
+        q = self.query(anatomy).flatten(2)
+
+        k = self.key(h).flatten(2)
+
+        v = self.value(h).flatten(2)
+
+        attn = torch.softmax(
+
+            torch.bmm(
+                q.transpose(1,2),
+                k,
+            ) * self.scale,
+
+            dim=-1,
+        )
+
+        out = torch.bmm(
+            attn,
+            v.transpose(1,2),
+        )
+
+        out = out.transpose(1,2)
+
+        out = out.view(
+            B,
+            C,
+            D,
+            H,
+            W,
+        )
+
+        return anatomy + out
+
 ############################################################
 # Time + Anatomy Aware Routing
 ############################################################
@@ -70,48 +137,85 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
         # Time embedding
         ####################################################
-
+        
         self.time_embed = SinusoidalTimeEmbedding(time_dim)
-
+        
         ####################################################
-        # Encode w_E2
+        # Anatomy encoder
         ####################################################
-
-        self.we2_pool = nn.Sequential(
-
+        
+        self.we2_encoder = nn.Sequential(
+        
             nn.Conv3d(
                 we2_channels,
-                16,
+                32,
                 kernel_size=3,
-                stride=2,
                 padding=1,
             ),
         
             nn.SiLU(),
         
             nn.Conv3d(
-                16,
                 32,
+                64,
                 kernel_size=3,
-                stride=2,
                 padding=1,
             ),
         
             nn.SiLU(),
+        )
+        
+        ####################################################
+        # Project UNet bottleneck
+        ####################################################
+        
+        self.h_proj = nn.Conv3d(
+            channels,
+            64,
+            kernel_size=1,
+        )
+        
+        ####################################################
+        # Posterior-aware gating
+        ####################################################
+        
+        self.posterior_gate = nn.Sequential(
+        
+            nn.Conv3d(
+                64 + 64,
+                64,
+                kernel_size=3,
+                padding=1,
+            ),
+        
+            nn.SiLU(),
+        
+            nn.Conv3d(
+                64,
+                64,
+                kernel_size=1,
+            ),
+        )
+        
+        ####################################################
+        # Pool anatomy
+        ####################################################
+        
+        self.we2_pool = nn.Sequential(
         
             nn.AdaptiveAvgPool3d((2,2,2)),
         
             nn.Flatten(),
         )
-
+        
         ####################################################
-        # Project anatomy embedding
+        # Projection
         ####################################################
-
+        
         self.we2_proj = nn.Sequential(
-
+        
             nn.Linear(
-                32 * 2 * 2 * 2,
+                64 * 2 * 2 * 2,
                 time_dim,
             ),
         
@@ -122,33 +226,39 @@ class TimeGatedConvSuite(nn.Module):
                 time_dim,
             ),
         )
-
+        
         ####################################################
         # Learn fusion gate
         ####################################################
-
+        
         self.gate_fc = nn.Sequential(
+        
             nn.Linear(
                 2 * time_dim,
                 time_dim,
             ),
+        
             nn.SiLU(),
+        
             nn.Linear(
                 time_dim,
                 time_dim,
             ),
         )
-
+        
         ####################################################
         # Router
         ####################################################
-
+        
         self.router = nn.Sequential(
+        
             nn.Linear(
                 time_dim,
                 time_dim,
             ),
+        
             nn.SiLU(),
+        
             nn.Linear(
                 time_dim,
                 3,
@@ -178,52 +288,157 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
         # Time embedding
         ####################################################
-
-        te = self.time_embed(t)
-
-        ####################################################
-        # Anatomy embedding
-        ####################################################
-
-        if w_e2 is None:
-            print("we2 none")
-            we2_feat = torch.zeros_like(te)
-
-        else:
-
-            we2_feat = self.we2_pool(w_e2)
-
-        we2_feat = self.we2_proj(
-            we2_feat,
-        )
-
-        te = F.normalize(te, dim=-1)
-        we2_feat = F.normalize(we2_feat, dim=-1)
-
-
-        ####################################################
-        # SNR weighting
-        ####################################################
-        # print(
-        #     te.norm(dim=1).mean()
-        # )
         
-        # print(
-        #     we2_feat.norm(dim=1).mean()
-        # )
+        te = self.time_embed(t)
+        
+        te = F.normalize(
+            te,
+            dim=-1,
+        )
+        
+        ####################################################
+        # Anatomy branch
+        ####################################################
+        
+        if w_e2 is None:
+        
+            we2_feat = torch.zeros_like(te)
+        
+        else:
+        
+            ################################################
+            # Spatial anatomy features
+            ################################################
+        
+            anatomy = self.we2_encoder(
+                w_e2,
+            )
+        
+            ################################################
+            # Current UNet belief
+            ################################################
+        
+            h_feat = self.h_proj(
+                x,
+            )
+            h_feat = F.interpolate(
+                h_feat,
+                size=anatomy.shape[2:],
+                mode="trilinear",
+                align_corners=False,
+            )
+            ################################################
+            # Posterior-aware gating
+            ################################################
+            # print("anatomy :", anatomy.shape)
+            # print("h_feat  :", h_feat.shape)
+            print("Entered posterior gate")
+            gate_map = torch.sigmoid(
+            
+                self.posterior_gate(
+        
+                    torch.cat(
+                        [
+                            anatomy,
+                            h_feat,
+                        ],
+                        dim=1,
+                    )
+        
+                )
+        
+            )
 
+            print(
+                "Posterior gate:",
+                gate_map.mean().item(),
+                gate_map.std().item(),
+            )
+        
+            ################################################
+            # Refine anatomy representation
+            ################################################
+            anatomy_before = anatomy
+            anatomy = anatomy * (1.0 + gate_map)
+            delta = (
+                anatomy - anatomy_before
+            ).norm() / (
+                anatomy_before.norm() + 1e-8
+            )
+            
+            print(
+                "Relative anatomy update:",
+                delta.item(),
+            )
+            cos = F.cosine_similarity(
+
+                anatomy_before.flatten(1),
+            
+                anatomy.flatten(1),
+            
+                dim=1,
+            
+            ).mean()
+            
+            print(
+                "Cosine:",
+                cos.item(),
+            )
+
+            print(
+                "Anatomy norm:",
+                anatomy.flatten(1).norm(dim=1).mean().item(),
+            )
+
+            print(
+                "UNet norm:",
+                h_feat.flatten(1).norm(dim=1).mean().item(),
+            )
+
+            print("Posterior grads: ",
+
+            self.posterior_gate[0].weight.grad
+            
+            )
+            
+            
+            print(
+            
+            self.we2_encoder[0].weight.grad
+            
+            )
+            ################################################
+            # Global descriptor
+            ################################################
+        
+            we2_feat = self.we2_pool(
+                anatomy,
+            )
+        
+            we2_feat = self.we2_proj(
+                we2_feat,
+            )
+        
+            we2_feat = F.normalize(
+                we2_feat,
+                dim=-1,
+            )
+        
+        ####################################################
+        # Gamma
+        ####################################################
         
         if gamma is None:
-
+        
             gamma_scalar = torch.ones(
                 te.shape[0],
                 1,
                 device=te.device,
                 dtype=te.dtype,
             )
-
+        
         else:
-
+        
             gamma_scalar = gamma.reshape(
                 gamma.shape[0],
                 -1,
@@ -231,15 +446,11 @@ class TimeGatedConvSuite(nn.Module):
                 dim=1,
                 keepdim=True,
             )
-        # print(
-        #     gamma_scalar.mean()
-        # )
-        # we2_feat = gamma_scalar * we2_feat
-
+        
         ####################################################
-        # Learn fusion
+        # Feature fusion
         ####################################################
-
+        
         fusion = torch.cat(
             [
                 te,
@@ -247,19 +458,37 @@ class TimeGatedConvSuite(nn.Module):
             ],
             dim=-1,
         )
-
-        gate = torch.sigmoid(
-            self.gate_fc(fusion)
-        )
-
-        # print("gate-te", (gate * te).norm(dim=1).mean())
         
-        # print("1-gate te", ((1-gate) * gamma_scalar * we2_feat).norm(dim=1).mean())
-        routing_feat = (
-            gate * te
-            +
-            (1.0 - gate) * we2_feat * gamma_scalar
+        gate = torch.sigmoid(
+            self.gate_fc(
+                fusion,
+            )
         )
+
+        corr = F.cosine_similarity(
+
+            anatomy.flatten(1),
+        
+            h_feat.flatten(1),
+        
+            dim=1,
+        
+        ).mean()
+        
+        print(
+            "Anatomy-H correlation:",
+            corr.item(),
+        )
+        
+        routing_feat = (
+        
+            gate * te
+        
+            +
+        
+            gamma_scalar * (1.0 - gate) * we2_feat
+        
+        ) 
 
         
 
