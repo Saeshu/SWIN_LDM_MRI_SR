@@ -78,22 +78,49 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
 
         self.we2_pool = nn.Sequential(
-            nn.AdaptiveAvgPool3d(1),
-            nn.Flatten(),
-            nn.Linear(
+
+            nn.Conv3d(
                 we2_channels,
-                time_dim,
+                16,
+                kernel_size=3,
+                stride=2,
+                padding=1,
             ),
+        
             nn.SiLU(),
+        
+            nn.Conv3d(
+                16,
+                32,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            ),
+        
+            nn.SiLU(),
+        
+            nn.AdaptiveAvgPool3d((2,2,2)),
+        
+            nn.Flatten(),
         )
 
         ####################################################
         # Project anatomy embedding
         ####################################################
 
-        self.we2_proj = nn.Linear(
-            time_dim,
-            time_dim,
+        self.we2_proj = nn.Sequential(
+
+            nn.Linear(
+                32 * 2 * 2 * 2,
+                time_dim,
+            ),
+        
+            nn.SiLU(),
+        
+            nn.Linear(
+                time_dim,
+                time_dim,
+            ),
         )
 
         ####################################################
@@ -159,7 +186,7 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
 
         if w_e2 is None:
-
+            print("we2 none")
             we2_feat = torch.zeros_like(te)
 
         else:
@@ -170,10 +197,22 @@ class TimeGatedConvSuite(nn.Module):
             we2_feat,
         )
 
+        te = F.normalize(te, dim=-1)
+        we2_feat = F.normalize(we2_feat, dim=-1)
+
+
         ####################################################
         # SNR weighting
         ####################################################
+        # print(
+        #     te.norm(dim=1).mean()
+        # )
+        
+        # print(
+        #     we2_feat.norm(dim=1).mean()
+        # )
 
+        
         if gamma is None:
 
             gamma_scalar = torch.ones(
@@ -192,8 +231,10 @@ class TimeGatedConvSuite(nn.Module):
                 dim=1,
                 keepdim=True,
             )
-
-        we2_feat = gamma_scalar * we2_feat
+        # print(
+        #     gamma_scalar.mean()
+        # )
+        # we2_feat = gamma_scalar * we2_feat
 
         ####################################################
         # Learn fusion
@@ -211,11 +252,16 @@ class TimeGatedConvSuite(nn.Module):
             self.gate_fc(fusion)
         )
 
+        # print("gate-te", (gate * te).norm(dim=1).mean())
+        
+        # print("1-gate te", ((1-gate) * gamma_scalar * we2_feat).norm(dim=1).mean())
         routing_feat = (
             gate * te
             +
-            (1.0 - gate) * we2_feat
+            (1.0 - gate) * we2_feat * gamma_scalar
         )
+
+        
 
         ####################################################
         # Routing
@@ -256,9 +302,12 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
         # Return raw gates if requested
         ####################################################
-
+    
         if return_gates:
-
+            # print(
+            #     f"Gate mean : {gate.mean():.3f}",
+            #     f"Gate std : {gate.std():.3f}",
+            # ) 
             gate_out = gates.detach()
 
         ####################################################
@@ -295,7 +344,7 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
 
         if return_gates:
-            print(gate_out.mean(dim=0))
-            return out, gate_out
+            # print(gate_out.mean(dim=0))
+            return out, gate_out, routing_feat.detach()
 
         return out
