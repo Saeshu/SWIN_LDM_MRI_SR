@@ -226,7 +226,7 @@ class TimeGatedConvSuite(nn.Module):
                 time_dim,
             ),
         )
-        
+        self.posterior_alpha = nn.Parameter(torch.tensor(0.0))
         ####################################################
         # Learn fusion gate
         ####################################################
@@ -327,6 +327,9 @@ class TimeGatedConvSuite(nn.Module):
                 mode="trilinear",
                 align_corners=False,
             )
+            anatomy = F.normalize(anatomy, dim=1)
+
+            h_feat = F.normalize(h_feat, dim=1)
             ################################################
             # Posterior-aware gating
             ################################################
@@ -358,17 +361,24 @@ class TimeGatedConvSuite(nn.Module):
             ################################################
             # Refine anatomy representation
             ################################################
-            anatomy_before = anatomy
-            anatomy = anatomy * (1.0 + gate_map)
+            anatomy_before = anatomy.detach().clone()
+            anatomy = anatomy + 0.1 * gate_map * h_feat
             delta = (
                 anatomy - anatomy_before
             ).norm() / (
                 anatomy_before.norm() + 1e-8
             )
-            
+            print(
+                "Gate contribution:",
+                (gate_map * h_feat).abs().mean().item()
+            )
             print(
                 "Relative anatomy update:",
                 delta.item(),
+            )
+            print(
+                "Update/max:",
+                delta.abs().max().item(),
             )
             cos = F.cosine_similarity(
 
@@ -392,21 +402,13 @@ class TimeGatedConvSuite(nn.Module):
 
             print(
                 "UNet norm:",
-                h_feat.flatten(1).norm(dim=1).mean().item(),
+                 h_feat.flatten(1).norm(dim=1).mean().item(),
             )
 
-            print("Posterior grads: ",
-
-            self.posterior_gate[0].weight.grad
-            
-            )
             
             
-            print(
             
-            self.we2_encoder[0].weight.grad
             
-            )
             ################################################
             # Global descriptor
             ################################################
@@ -533,10 +535,10 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
     
         if return_gates:
-            # print(
-            #     f"Gate mean : {gate.mean():.3f}",
-            #     f"Gate std : {gate.std():.3f}",
-            # ) 
+            print(
+                f"Gate mean : {gate.mean():.3f}",
+                f"Gate std : {gate.std():.3f}",
+            ) 
             gate_out = gates.detach()
 
         ####################################################
