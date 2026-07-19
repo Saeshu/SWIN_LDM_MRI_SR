@@ -197,72 +197,19 @@ class TimeGatedConvSuite(nn.Module):
             ),
         )
         
-        ####################################################
-        # Pool anatomy
-        ####################################################
-        
-        self.we2_pool = nn.Sequential(
-        
-            nn.AdaptiveAvgPool3d((2,2,2)),
-        
-            nn.Flatten(),
-        )
-        
-        ####################################################
-        # Projection
-        ####################################################
-        
-        self.we2_proj = nn.Sequential(
-        
-            nn.Linear(
-                64 * 2 * 2 * 2,
-                time_dim,
-            ),
-        
+        self.time_to_spatial = nn.Sequential(
+            nn.Linear(time_dim, 64),
             nn.SiLU(),
-        
-            nn.Linear(
-                time_dim,
-                time_dim,
-            ),
+            nn.Linear(64, 64),
         )
-        self.posterior_alpha = nn.Parameter(torch.tensor(0.0))
-        ####################################################
-        # Learn fusion gate
-        ####################################################
-        
-        self.gate_fc = nn.Sequential(
-        
-            nn.Linear(
-                2 * time_dim,
-                time_dim,
-            ),
-        
-            nn.SiLU(),
-        
-            nn.Linear(
-                time_dim,
-                time_dim,
-            ),
-        )
-        
         ####################################################
         # Router
         ####################################################
         
         self.router = nn.Sequential(
-        
-            nn.Linear(
-                time_dim,
-                time_dim,
-            ),
-        
+            nn.Conv3d(64, 64, kernel_size=3, padding=1),
             nn.SiLU(),
-        
-            nn.Linear(
-                time_dim,
-                3,
-            ),
+            nn.Conv3d(64, 3, kernel_size=1),
         )
 
         ####################################################
@@ -295,7 +242,12 @@ class TimeGatedConvSuite(nn.Module):
             te,
             dim=-1,
         )
-        
+        te_spatial = self.time_to_spatial(te)
+
+        # [B,64,1,1,1]
+        te_spatial = te_spatial.unsqueeze(-1)\
+                               .unsqueeze(-1)\
+                               .unsqueeze(-1)
         ####################################################
         # Anatomy branch
         ####################################################
@@ -313,7 +265,8 @@ class TimeGatedConvSuite(nn.Module):
             anatomy = self.we2_encoder(
                 w_e2,
             )
-        
+            # print(anatomy.shape)
+            
             ################################################
             # Current UNet belief
             ################################################
@@ -333,9 +286,7 @@ class TimeGatedConvSuite(nn.Module):
             ################################################
             # Posterior-aware gating
             ################################################
-            # print("anatomy :", anatomy.shape)
-            # print("h_feat  :", h_feat.shape)
-            print("Entered posterior gate")
+           
             gate_map = torch.sigmoid(
             
                 self.posterior_gate(
@@ -352,79 +303,16 @@ class TimeGatedConvSuite(nn.Module):
         
             )
 
-            print(
-                "Posterior gate:",
-                gate_map.mean().item(),
-                gate_map.std().item(),
-            )
+           
         
             ################################################
             # Refine anatomy representation
             ################################################
             anatomy_before = anatomy.detach().clone()
             anatomy = anatomy + 0.1 * gate_map * h_feat
-            delta = (
-                anatomy - anatomy_before
-            ).norm() / (
-                anatomy_before.norm() + 1e-8
-            )
-            print(
-                "Gate contribution:",
-                (gate_map * h_feat).abs().mean().item()
-            )
-            print(
-                "Relative anatomy update:",
-                delta.item(),
-            )
-            print(
-                "Update/max:",
-                delta.abs().max().item(),
-            )
-            cos = F.cosine_similarity(
-
-                anatomy_before.flatten(1),
             
-                anatomy.flatten(1),
-            
-                dim=1,
-            
-            ).mean()
-            
-            print(
-                "Cosine:",
-                cos.item(),
-            )
-
-            print(
-                "Anatomy norm:",
-                anatomy.flatten(1).norm(dim=1).mean().item(),
-            )
-
-            print(
-                "UNet norm:",
-                 h_feat.flatten(1).norm(dim=1).mean().item(),
-            )
-
-            
-            
-            
-            
-            ################################################
-            # Global descriptor
-            ################################################
-        
-            we2_feat = self.we2_pool(
-                anatomy,
-            )
-        
-            we2_feat = self.we2_proj(
-                we2_feat,
-            )
-        
-            we2_feat = F.normalize(
-                we2_feat,
-                dim=-1,
-            )
+          
+    
         
         ####################################################
         # Gamma
@@ -448,64 +336,26 @@ class TimeGatedConvSuite(nn.Module):
                 dim=1,
                 keepdim=True,
             )
-        
-        ####################################################
-        # Feature fusion
-        ####################################################
-        
-        fusion = torch.cat(
-            [
-                te,
-                we2_feat,
-            ],
-            dim=-1,
-        )
-        
-        gate = torch.sigmoid(
-            self.gate_fc(
-                fusion,
-            )
-        )
 
-        corr = F.cosine_similarity(
+        gamma_map = gamma_scalar.view(-1,1,1,1,1)
 
-            anatomy.flatten(1),
-        
-            h_feat.flatten(1),
-        
-            dim=1,
-        
-        ).mean()
-        
-        print(
-            "Anatomy-H correlation:",
-            corr.item(),
-        )
-        
-        routing_feat = (
-        
-            gate * te
-        
-            +
-        
-            gamma_scalar * (1.0 - gate) * we2_feat
-        
-        ) 
-
-        
+        # Broadcast timestep automatically
+        routing_feat = anatomy + gamma_map * te_spatial
 
         ####################################################
         # Routing
         ####################################################
 
-        logits = self.router(
-            routing_feat,
-        )
-
-        gates = torch.softmax(
-            logits,
-            dim=-1,
-        )
+        logits = self.router(routing_feat)
+        if logits.shape[2:] != x.shape[2:]:
+            logits = F.interpolate(
+                logits,
+                size=x.shape[2:],
+                mode="trilinear",
+                align_corners=False,
+            )
+        # Softmax over experts
+        gates = torch.softmax(logits, dim=1)
 
         ####################################################
         # Optional masking
@@ -529,18 +379,18 @@ class TimeGatedConvSuite(nn.Module):
                     keepdim=True,
                 ) + 1e-8
             )
-
+        # print("gates new: ", gates.shape)
         ####################################################
         # Return raw gates if requested
         ####################################################
     
         if return_gates:
-            print(
-                f"Gate mean : {gate.mean():.3f}",
-                f"Gate std : {gate.std():.3f}",
-            ) 
+            # print(
+            #     f"Gate mean : {gate.mean():.3f}",
+            #     f"Gate std : {gate.std():.3f}",
+            # ) 
             gate_out = gates.detach()
-
+            # print(gate_out.shape)
         ####################################################
         # Experts
         ####################################################
@@ -552,23 +402,33 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
         # Broadcast gates
         ####################################################
-
-        gates = gates.unsqueeze(-1)\
-                     .unsqueeze(-1)\
-                     .unsqueeze(-1)\
-                     .unsqueeze(-1)
-
+        
+        g0 = gates[:,0:1]
+        g1 = gates[:,1:2]
+        g2 = gates[:,2:3]
+        # print("g0      :", g0.shape)
+        # print("g1      :", g1.shape)
+        # print("g2      :", g2.shape)
+        
+        # print("spatial :", spatial.shape)
+        # print("mid     :", mid.shape)
+        # print("long    :", long.shape)
+        out = (
+            g0 * spatial +
+            g1 * mid +
+            g2 * long
+        )
         ####################################################
         # Mixture of experts
         ####################################################
 
-        out = (
-            gates[:,0] * spatial
-            +
-            gates[:,1] * mid
-            +
-            gates[:,2] * long
-        )
+        # out = (
+        #     gates[:,0] * spatial
+        #     +
+        #     gates[:,1] * mid
+        #     +
+        #     gates[:,2] * long
+        # )
 
         ####################################################
         # Return
