@@ -35,7 +35,11 @@ def random_crop_3d(vol, crop_size):
 
     return vol[d:d+cd, h:h+ch, w:w+cw]
 
-
+def rician_noise(img, sigma):
+    n1 = torch.randn_like(img) * sigma
+    n2 = torch.randn_like(img) * sigma
+    return torch.sqrt((img + n1) ** 2 + n2 ** 2)
+  
 class MRIDataset(Dataset):
     """
     MRI Dataset supporting:
@@ -48,12 +52,21 @@ class MRIDataset(Dataset):
         root_dir,
         crop_size=(128, 256, 256),
         normalize=True,
-        downscale_factor=None,  # None → AE mode, int → SR mode
+        downscale_factor=None,   # None → AE mode, int → SR mode
+        noise_sigma = 0.01,
         augment=True
     ):
         self.root_dir = root_dir
         self.crop_size = crop_size
         self.normalize = normalize
+        self.noise_sigma = noise_sigma
+        if isinstance(downscale_factor, int):
+            downscale_factor = (
+                downscale_factor,
+                downscale_factor,
+                downscale_factor,
+            )
+
         self.downscale_factor = downscale_factor
         self.augment = augment
 
@@ -68,10 +81,51 @@ class MRIDataset(Dataset):
 
         # ensure divisibility for SR
         if downscale_factor is not None:
-            for c in crop_size:
-                assert c % downscale_factor == 0, \
-                    "crop_size must be divisible by downscale_factor"
+            for c, s in zip(crop_size, self.downscale_factor):
+              assert c % s == 0
+    
+    def degrade(self, hr):
+      """
+      hr : [1, D, H, W]
 
+      Returns
+      -------
+      lr_up   : [1,D,H,W] (input to model)
+      lr_small: [1,d,h,w] (actual acquired image)
+      """
+
+      _, D, H, W = hr.shape
+
+      sz, sy, sx = self.downscale_factor
+
+      d = max(1, round(D / sz))
+      h = max(1, round(H / sy))
+      w = max(1, round(W / sx))
+
+      # simulate acquisition
+      lr_small = F.interpolate(
+          hr.unsqueeze(0),
+          size=(d, h, w),
+          mode="trilinear",
+          align_corners=False,
+      )
+
+      # bring back to HR grid
+      lr_up = F.interpolate(
+          lr_small,
+          size=(D, H, W),
+          mode="trilinear",
+          align_corners=False,
+      ).squeeze(0)
+
+      # Rician noise
+      lr_up = rician_noise(lr_up, self.noise_sigma)
+
+      lr_up = lr_up.clamp(0, 1)
+
+      return lr_up, lr_small.squeeze(0)
+    
+    
     def __len__(self):
         return len(self.files)
 
@@ -124,10 +178,7 @@ class MRIDataset(Dataset):
         # -----------------------------
         # SR mode (spatial only)
         # -----------------------------
-        lr = F.avg_pool3d(
-            hr.unsqueeze(0),
-            kernel_size=(1, self.downscale_factor, self.downscale_factor),
-            stride=(1, self.downscale_factor, self.downscale_factor)
-        ).squeeze(0)
-
-        return hr, lr
+        lr, lr_small = self.degrade(hr)
+ 
+        return hr, lr, lr_small
+    
