@@ -3,7 +3,7 @@ from Diffusion.LinearNoise import NoiseScheduler
 
 noise_scheduler = NoiseScheduler(
                     timesteps = 50,
-                    mode = 'v'
+                    prediction_type = 'v'
                   )
 
 
