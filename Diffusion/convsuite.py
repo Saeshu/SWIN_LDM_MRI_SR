@@ -255,7 +255,18 @@ class TimeGatedConvSuite(nn.Module):
         if w_e2 is None:
         
             we2_feat = torch.zeros_like(te)
-        
+            gamma_scalar = torch.ones(
+                te.shape[0],
+                1,
+                device=te.device,
+                dtype=te.dtype,
+            )
+            gates = torch.full(
+            (x.shape[0], 3, *x.shape[2:]),
+            1.0 / 3.0,
+            device=x.device,
+            dtype=x.dtype,
+        )
         else:
         
             ################################################
@@ -336,26 +347,26 @@ class TimeGatedConvSuite(nn.Module):
                 dim=1,
                 keepdim=True,
             )
+        if w_e2 is not None:
+            gamma_map = gamma_scalar.view(-1,1,1,1,1)
+            
+            # Broadcast timestep automatically
+            routing_feat = anatomy + gamma_map * te_spatial
 
-        gamma_map = gamma_scalar.view(-1,1,1,1,1)
-
-        # Broadcast timestep automatically
-        routing_feat = anatomy + gamma_map * te_spatial
-
-        ####################################################
-        # Routing
-        ####################################################
-
-        logits = self.router(routing_feat)
-        if logits.shape[2:] != x.shape[2:]:
-            logits = F.interpolate(
-                logits,
-                size=x.shape[2:],
-                mode="trilinear",
-                align_corners=False,
-            )
-        # Softmax over experts
-        gates = torch.softmax(logits, dim=1)
+            ####################################################
+            # Routing
+            ####################################################
+    
+            logits = self.router(routing_feat)
+            if logits.shape[2:] != x.shape[2:]:
+                logits = F.interpolate(
+                    logits,
+                    size=x.shape[2:],
+                    mode="trilinear",
+                    align_corners=False,
+                )
+            # Softmax over experts
+            gates = torch.softmax(logits, dim=1)
 
         ####################################################
         # Optional masking
