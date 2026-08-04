@@ -52,47 +52,63 @@ class WindowPool3D(nn.Module):
         super().__init__()
         self.window_size = window_size
         self.shift = shift
-        
+
     def forward(self, x):
         B, C, D, H, W = x.shape
         wd, wh, ww = self.window_size
-    
+
         # -----------------------------
         # Compute padding
         # -----------------------------
         pad_d = (wd - D % wd) % wd
         pad_h = (wh - H % wh) % wh
         pad_w = (ww - W % ww) % ww
-    
+
         x = F.pad(x, (0, pad_w, 0, pad_h, 0, pad_d))
-    
-        # 🔥 NEW: capture padded size
+
         D_pad, H_pad, W_pad = x.shape[2:]
-    
+
         # -----------------------------
-        # Unfold
+        # Unfold into windows
         # -----------------------------
-        x = x.unfold(2, wd, wd) \
-             .unfold(3, wh, wh) \
+        x = (
+            x.unfold(2, wd, wd)
+             .unfold(3, wh, wh)
              .unfold(4, ww, ww)
-    
+        )
+
         Nd, Nh, Nw = x.shape[2:5]
-    
-        x = x.contiguous().view(B, C, Nd * Nh * Nw, wd * wh * ww)
-    
+
+        x = x.contiguous().view(
+            B,
+            C,
+            Nd * Nh * Nw,
+            wd * wh * ww
+        )
+
         # -----------------------------
         # Tokenization
         # -----------------------------
         mean = x.mean(dim=-1)
         std = x.std(dim=-1)
-    
-        tokens = mean + 0.1 * std
-        tokens = tokens / (tokens.std(dim=-1, keepdim=True) + 1e-6)
-    
+
+        raw_tokens = mean + 0.1 * std
+
+        tokens = raw_tokens / (
+            raw_tokens.std(dim=-1, keepdim=True) + 1e-6
+        )
+
         tokens = tokens.permute(0, 2, 1)
-    
-        # 🔥 RETURN padded size
-        return tokens, (Nd, Nh, Nw), (wd, wh, ww), (D_pad, H_pad, W_pad)
+
+        return (
+            tokens,
+            (Nd, Nh, Nw),
+            (wd, wh, ww),
+            (D_pad, H_pad, W_pad),
+            mean,
+            std,
+            raw_tokens,
+        )
     
     
 class KernelMixingAttention(nn.Module):
@@ -154,7 +170,7 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-    
+        print("window size:", self.window_size)
         # -----------------------------
         # HF from raw
         # -----------------------------
@@ -202,12 +218,20 @@ class AnisotropicSwinBlock(nn.Module):
         # print("x_small device:", x_small.device)
         # print("reduce device:", next(self.reduce.parameters()).device)
         B, C_s, D_s, H_s, W_s = x_small.shape
-    
+        print("x_small: ", x_small.shape)
         feats = self.conv_suite(x)
     
         if self.use_attention:
     
-            tokens, (Nd, Nh, Nw), (wd, wh, ww), (D_pad, H_pad, W_pad) = self.window_pool(x_small)
+            (
+                  tokens,
+                  (Nd, Nh, Nw),
+                  (wd, wh, ww),
+                  (D_pad, H_pad, W_pad),
+                  mean,
+                  std,
+                  raw_tokens,
+              ) = self.window_pool(x_small)
 
             D_orig, H_orig, W_orig = x_small.shape[2:]
 
@@ -234,7 +258,10 @@ class AnisotropicSwinBlock(nn.Module):
             # -----------------------------
             # Attention → logits
             # -----------------------------
-            logits = self.attn(tokens)  # [B, N, K]
+            logits = self.attn(tokens) 
+            print("mean logits: ", logits.mean())
+            print("std logits: ", logits.std()) # [B, N, K]
+            raw_logits = logits.detach().clone()
             if self.training:
                 inv_perm = torch.argsort(perm)
                 logits = logits[:, inv_perm]
@@ -305,10 +332,18 @@ class AnisotropicSwinBlock(nn.Module):
         for i, f in enumerate(feats):
             y = y + weights[:, i:i+1] * f
         y = self.act(self.norm(y))
-    
+        
         if return_weights:
-            return y, weights
-    
+            return (
+                  y,
+                  weights,
+                  mean,
+                  std,
+                  raw_logits,
+                  raw_tokens,
+                  tokens,
+                  (Nd, Nh, Nw),
+              )
         return y
     
             
