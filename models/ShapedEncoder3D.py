@@ -59,18 +59,16 @@ class WindowPool3D(nn.Module):
         if self.window_size is None:
 
             wd = 1
-        
-            if H >= 64:
-                wh = ww = 11
-        
-            elif H >= 32:
-                wh = ww = 7
-        
-            elif H >= 16:
-                wh = ww = 5
-        
-            else:
-                wh = ww = 3
+
+            wh = max(3, H // target_windows)
+            ww = max(3, W // target_windows)
+            
+            # odd sizes
+            if wh % 2 == 0:
+                wh += 1
+            
+            if ww % 2 == 0:
+                ww += 1
         
         else:
             wd, wh, ww = self.window_size
