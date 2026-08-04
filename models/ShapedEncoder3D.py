@@ -57,7 +57,7 @@ class WindowPool3D(nn.Module):
         B, C, D, H, W = x.shape
         # wd, wh, ww = self.window_size
         if self.window_size is None:
-
+            target_windows = 5
             wd = 1
 
             wh = max(3, H // target_windows)
