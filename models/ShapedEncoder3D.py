@@ -57,7 +57,7 @@ class WindowPool3D(nn.Module):
         B, C, D, H, W = x.shape
         # wd, wh, ww = self.window_size
         if self.window_size is None:
-            target_grid = (16, 5, 5)   # (D, H, W)
+            target_grid = (32, 4, 4)   # (D, H, W)
 
             D, H, W = x.shape[2:]
             
