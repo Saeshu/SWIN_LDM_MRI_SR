@@ -57,19 +57,25 @@ class WindowPool3D(nn.Module):
         B, C, D, H, W = x.shape
         # wd, wh, ww = self.window_size
         if self.window_size is None:
-            target_windows = 5
-            wd = 1
+            target_grid = (16, 5, 5)   # (D, H, W)
 
-            wh = max(3, H // target_windows)
-            ww = max(3, W // target_windows)
+            D, H, W = x.shape[2:]
             
-            # odd sizes
+            wd = max(1, D // target_grid[0])
+            wh = max(3, H // target_grid[1])
+            ww = max(3, W // target_grid[2])
+            
+            # keep odd sizes for H/W
             if wh % 2 == 0:
                 wh += 1
-            
             if ww % 2 == 0:
                 ww += 1
-        
+            
+            # depth can stay any integer
+            wd = min(wd, D)
+            wh = min(wh, H)
+            ww = min(ww, W)
+            print("window size: ", wd, ",", wh, ",", ww)         
         else:
             wd, wh, ww = self.window_size
         # -----------------------------
