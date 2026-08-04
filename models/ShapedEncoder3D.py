@@ -48,15 +48,32 @@ class AnisotropicConvSuite(nn.Module):
         return x
     
 class WindowPool3D(nn.Module):
-    def __init__(self, window_size=(1, 7, 7), shift=False):
+    def __init__(self, window_size=None, shift=False):
         super().__init__()
         self.window_size = window_size
         self.shift = shift
 
     def forward(self, x):
         B, C, D, H, W = x.shape
-        wd, wh, ww = self.window_size
+        # wd, wh, ww = self.window_size
+        if self.window_size is None:
 
+            wd = 1
+        
+            if H >= 64:
+                wh = ww = 11
+        
+            elif H >= 32:
+                wh = ww = 7
+        
+            elif H >= 16:
+                wh = ww = 5
+        
+            else:
+                wh = ww = 3
+        
+        else:
+            wd, wh, ww = self.window_size
         # -----------------------------
         # Compute padding
         # -----------------------------
@@ -138,7 +155,7 @@ class AnisotropicSwinBlock(nn.Module):
         self,
         in_ch,
         out_ch,
-        window_size=(1, 11, 11),
+        window_size=None,
         use_attention=True,
         shift=False
     ):
@@ -218,7 +235,7 @@ class AnisotropicSwinBlock(nn.Module):
         # print("x_small device:", x_small.device)
         # print("reduce device:", next(self.reduce.parameters()).device)
         B, C_s, D_s, H_s, W_s = x_small.shape
-        print("x_small: ", x_small.shape)
+        # print("x_small: ", x_small.shape)
         feats = self.conv_suite(x)
     
         if self.use_attention:
@@ -259,8 +276,8 @@ class AnisotropicSwinBlock(nn.Module):
             # Attention → logits
             # -----------------------------
             logits = self.attn(tokens) 
-            print("mean logits: ", logits.mean())
-            print("std logits: ", logits.std()) # [B, N, K]
+            # print("mean logits: ", logits.mean())
+            # print("std logits: ", logits.std()) # [B, N, K]
             raw_logits = logits.detach().clone()
             if self.training:
                 inv_perm = torch.argsort(perm)
