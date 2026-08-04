@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from .ShapedEncoder3D import AnisotropicSwinBlock, SpatialDownsample3D
 from .Decoder import DecoderBlock, OutputRefinementHead
 ENC_KERNEL_DIM = 5
@@ -135,8 +136,8 @@ class AutoEncoder(nn.Module):
         out = self.enc2(x, return_weights=True)
         
         if isinstance(out, tuple):
-            x, w_E2, mean, std, raw_logits, raw_tokens, tokens, (Nd, Nh, Nw) = out
-            print("w_E2: ", w_E2.shape)
+            x, w_E2 = out
+            # print("w_E2: ", w_E2.shape)
         else:
             x = out
             w_E2 = None
@@ -146,26 +147,42 @@ class AutoEncoder(nn.Module):
         # 🔥 TEMP FIX: make compatible with decoder
        
     
-        return x, w_E2, mean, std, raw_logits, raw_tokens, tokens, (Nd, Nh, Nw)
-    
+        return x, w_E2
     def decode(self, z, w_E2=None, return_weights=False):
-
+        # print(f"Before decode: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
         if w_E2 is not None:
             z, weights = self.dec2(z, w_E2, return_weights=True)
         else:
             z = self.dec2(z, None)
             weights = None
     
-        z = self.dec1(z)
-        z = self.dec0(z)
+        # print(z.shape)
+        # print(f"After dec2: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
     
+        z = checkpoint(
+            self.dec1,
+            z,
+            use_reentrant=False
+        )
+        # print(z.shape)
+        # print(f"After dec1: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+        
+        
+        z = checkpoint(
+            self.dec0,
+            z,
+            use_reentrant=False
+        )
+        # print(z.shape)
+        # print(f"After dec0: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
+        
         out = self.out(z)
     
         if return_weights:
             return out, weights
     
         return out
-    
+        
     def forward(self, x, mode="we2", return_weights=False):
 
         z, w = self.encode(x)
