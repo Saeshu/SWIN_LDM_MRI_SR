@@ -133,8 +133,10 @@ class AutoEncoder(nn.Module):
         x = self.down1(x)
 
         out = self.enc2(x, return_weights=True)
+        
         if isinstance(out, tuple):
-            x, w_E2 = out
+            x, w_E2, mean, std, raw_logits, raw_tokens, tokens, (Nd, Nh, Nw) = out
+            print("w_E2: ", w_E2.shape)
         else:
             x = out
             w_E2 = None
@@ -144,7 +146,7 @@ class AutoEncoder(nn.Module):
         # 🔥 TEMP FIX: make compatible with decoder
        
     
-        return x, w_E2
+        return x, w_E2, mean, std, raw_logits, raw_tokens, tokens, (Nd, Nh, Nw)
     
     def decode(self, z, w_E2=None, return_weights=False):
 
