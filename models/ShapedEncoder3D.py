@@ -75,7 +75,7 @@ class WindowPool3D(nn.Module):
             wd = min(wd, D)
             wh = min(wh, H)
             ww = min(ww, W)
-            print("window size: ", wd, ",", wh, ",", ww)         
+            # print("window size: ", wd, ",", wh, ",", ww)         
         else:
             wd, wh, ww = self.window_size
         # -----------------------------
@@ -191,7 +191,7 @@ class AnisotropicSwinBlock(nn.Module):
 
     def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-        print("window size:", self.window_size)
+        # print("window size:", self.window_size)
         # -----------------------------
         # HF from raw
         # -----------------------------
@@ -337,6 +337,16 @@ class AnisotropicSwinBlock(nn.Module):
             logits = logits / (logits.std(dim=1, keepdim=True) + 1e-5)
             logits = logits + 0.01 * torch.randn_like(logits)
             weights = F.softmax(logits / 0.8, dim=1)
+            # weights = torch.ones(
+            #     B,
+            #     self.num_kernels,
+            #     D,
+            #     H,
+            #     W,
+            #     device=x.device
+            # )
+            
+            # weights /= self.num_kernels
     
         else:
             weights = F.softmax(self.alpha, dim=0)
@@ -357,13 +367,7 @@ class AnisotropicSwinBlock(nn.Module):
         if return_weights:
             return (
                   y,
-                  weights,
-                  mean,
-                  std,
-                  raw_logits,
-                  raw_tokens,
-                  tokens,
-                  (Nd, Nh, Nw),
+                  weights
               )
         return y
     
