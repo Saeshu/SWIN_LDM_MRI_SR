@@ -154,42 +154,42 @@ class AutoEncoder(nn.Module):
     return_weights=False,
 ):
 
-    if return_weights:
-
-        z, weights = self.dec2(
+        if return_weights:
+    
+            z, weights = self.dec2(
+                z,
+                return_weights=True,
+            )
+    
+        else:
+    
+            z = self.dec2(z)
+    
+            weights = None
+    
+        # ------------------------------------------------
+        # Remaining decoder
+        # ------------------------------------------------
+    
+        z = checkpoint(
+            self.dec1,
             z,
-            return_weights=True,
+            use_reentrant=False,
         )
-
-    else:
-
-        z = self.dec2(z)
-
-        weights = None
-
-    # ------------------------------------------------
-    # Remaining decoder
-    # ------------------------------------------------
-
-    z = checkpoint(
-        self.dec1,
-        z,
-        use_reentrant=False,
-    )
-
-    z = checkpoint(
-        self.dec0,
-        z,
-        use_reentrant=False,
-    )
-
-    out = self.out(z)
-
-    if return_weights:
-
-        return out, weights
-
-    return out
+    
+        z = checkpoint(
+            self.dec0,
+            z,
+            use_reentrant=False,
+        )
+    
+        out = self.out(z)
+    
+        if return_weights:
+    
+            return out, weights
+    
+        return out
         
     def forward(self, x, mode="we2", return_weights=False):
 
