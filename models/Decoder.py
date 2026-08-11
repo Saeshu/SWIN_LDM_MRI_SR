@@ -179,104 +179,166 @@ class DecoderConvSuite(nn.Module):
 # --------------------------------------------------
 
 class DecoderBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, upsample=True):
+
+    def __init__(
+        self,
+        in_ch,
+        out_ch,
+        upsample=True,
+    ):
         super().__init__()
 
         self.upsample_enabled = upsample
-        self.upsample = SpatialUpsample3D(scale_factor=2)
+        self.upsample = SpatialUpsample3D(
+            scale_factor=2
+        )
 
-        self.conv_suite = DecoderConvSuite(in_ch, out_ch)
+        # ------------------------------------------------
+        # Decoder expert suite
+        # ------------------------------------------------
 
-        # 🔥 plug-in mixer
+        self.conv_suite = DecoderConvSuite(
+            in_ch,
+            out_ch
+        )
+
+        # Number of decoder experts
+        self.num_kernels = self.conv_suite.num_paths
+
+        # ------------------------------------------------
+        # Decoder routing network
+        #
+        # IMPORTANT:
+        # This replaces w_E2.
+        #
+        # Routing is generated from decoder features
+        # rather than being supplied by the encoder.
+        # ------------------------------------------------
+
+        router_hidden = max(
+            32,
+            in_ch // 2
+        )
+
+        self.router = nn.Sequential(
+
+            nn.Conv3d(
+                in_ch,
+                router_hidden,
+                kernel_size=3,
+                padding=1,
+            ),
+
+            nn.SiLU(),
+
+            nn.Conv3d(
+                router_hidden,
+                self.num_kernels,
+                kernel_size=1,
+            ),
+        )
+
+        # ------------------------------------------------
+        # Optional smoothing/mixing
+        # ------------------------------------------------
+
         self.mixer = SmoothedSpatialKernelMixer()
 
-        self.norm = nn.GroupNorm(8, out_ch)
+        self.norm = nn.GroupNorm(
+            8,
+            out_ch
+        )
+
         self.act = nn.SiLU()
 
-    def forward(self, x, w_E2=None, return_weights=False):
+    def forward(
+        self,
+        x,
+        return_weights=False,
+    ):
+
+        # =================================================
+        # 1. Upsample
+        # =================================================
 
         if self.upsample_enabled:
-            x = self.upsample(x)
-    
-        feats = self.conv_suite(x)
-        # print("decoder K:", len(feats))
-        # print("input x:", x.shape)
-        if w_E2 is not None:
-            y, weights = self.mixer(feats, w_E2, return_weights=True)
-        else:
-            y = sum(feats) / len(feats)
-            weights = None
-    
-        y = self.act(self.norm(y))
-    
-        if return_weights:
-            return y, weights
-    
-        return y
-        
-        # y = self.heavy(x, encoder_kernel_skip)
-    
-        #print("AFTER heavy, y:", None if y is None else y.shape)
-    
-        #assert y is not None, "heavy() returned None ❌"
-    
-        # y = self.act(self.norm(y))
-    
-    
-    
-    def heavy(self, x, encoder_kernel_skip):
-        
-        feats = self.conv_suite(x)
-    
-        #print("feats:", len(feats), feats[0].shape)
-    
-        B, C, D, H, W = feats[0].shape
-        
-        if isinstance(encoder_kernel_skip, torch.Tensor) and encoder_kernel_skip.dim() == 5:
 
-            weights = encoder_kernel_skip
-        
-            weights = weights / (weights.std(dim=(2,3,4), keepdim=True) + 1e-6)
-        
-            weights = F.avg_pool3d(
-                weights,
-                kernel_size=(1, 3, 3),
-                stride=1,
-                padding=(0, 1, 1)
-            )
-        
-            weights = F.interpolate(
-                weights,
-                size=x.shape[2:],
-                mode="trilinear",
-                align_corners=False
-            )
-        
-            K = min(weights.shape[1], self.num_dec_kernels)
-            weights = weights[:, :K]
-            feats = feats[:K]
-        
-            weights = F.softmax(weights, dim=1)
-        
-        else:
-            # 🔥 fallback: uniform weights
-            K = min(len(feats), self.num_dec_kernels)
-            feats = feats[:K]
-        
-            weights = torch.ones(
-                (x.shape[0], K, x.shape[2], x.shape[3], x.shape[4]),
-                device=x.device
-            ) / K
-    
-        y = torch.zeros_like(feats[0])
-    
+            x = self.upsample(x)
+
+        # =================================================
+        # 2. Generate decoder routing
+        # =================================================
+        #
+        # x is the rich decoder representation.
+        #
+        # This is our new h_D2.
+        #
+        # w_dec = R_dec(h_D2)
+        #
+        # =================================================
+
+        routing_feat = x
+
+        logits = self.router(
+            routing_feat
+        )
+
+        # -------------------------------------------------
+        # Spatially varying expert probabilities
+        # -------------------------------------------------
+
+        w_dec = torch.softmax(
+            logits,
+            dim=1
+        )
+
+        # =================================================
+        # 3. Generate decoder expert features
+        # =================================================
+
+        feats = self.conv_suite(x)
+
+        assert len(feats) == self.num_kernels, (
+            f"Decoder expert mismatch: "
+            f"conv_suite returned {len(feats)} "
+            f"experts but router produces "
+            f"{self.num_kernels} weights."
+        )
+
+        # =================================================
+        # 4. Mix experts using w_dec
+        # =================================================
+
+        y = torch.zeros_like(
+            feats[0]
+        )
+
         for i, f in enumerate(feats):
-            # weights = encoder_kernel_skip
-            # assert weights.shape[1] > i, f"weight mismatch at {i}"
-            y = y + weights[:, i:i+1] * f
-    
-        #print("RETURNING y:", y.shape)
-    
+
+            y = (
+                y
+                + w_dec[:, i:i+1] * f
+            )
+
+        # =================================================
+        # 5. Normalize + activation
+        # =================================================
+
+        y = self.act(
+            self.norm(y)
+        )
+
+        # =================================================
+        # 6. Return
+        # =================================================
+
+        if return_weights:
+
+            return (
+                y,
+                w_dec,
+            )
+
         return y
             
 
