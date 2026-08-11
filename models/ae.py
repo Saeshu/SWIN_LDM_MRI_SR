@@ -148,40 +148,48 @@ class AutoEncoder(nn.Module):
        
     
         return x, w_E2
-    def decode(self, z, w_E2=None, return_weights=False):
-        # print(f"Before decode: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
-        if w_E2 is not None:
-            z, weights = self.dec2(z, w_E2, return_weights=True)
-        else:
-            z = self.dec2(z, None)
-            weights = None
-    
-        # print(z.shape)
-        # print(f"After dec2: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
-    
-        z = checkpoint(
-            self.dec1,
+    def decode(
+    self,
+    z,
+    return_weights=False,
+):
+
+    if return_weights:
+
+        z, weights = self.dec2(
             z,
-            use_reentrant=False
+            return_weights=True,
         )
-        # print(z.shape)
-        # print(f"After dec1: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
-        
-        
-        z = checkpoint(
-            self.dec0,
-            z,
-            use_reentrant=False
-        )
-        # print(z.shape)
-        # print(f"After dec0: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
-        
-        out = self.out(z)
-    
-        if return_weights:
-            return out, weights
-    
-        return out
+
+    else:
+
+        z = self.dec2(z)
+
+        weights = None
+
+    # ------------------------------------------------
+    # Remaining decoder
+    # ------------------------------------------------
+
+    z = checkpoint(
+        self.dec1,
+        z,
+        use_reentrant=False,
+    )
+
+    z = checkpoint(
+        self.dec0,
+        z,
+        use_reentrant=False,
+    )
+
+    out = self.out(z)
+
+    if return_weights:
+
+        return out, weights
+
+    return out
         
     def forward(self, x, mode="we2", return_weights=False):
 
