@@ -8,7 +8,7 @@ from .Decoder import DecoderBlock, OutputRefinementHead
 ENC_KERNEL_DIM = 5
 class WE2FiLM(nn.Module):
     def __init__(self, hidden_ch=64):
-        super().__init__()
+        super().__init__()   
 
         self.hidden_ch = hidden_ch
 
