@@ -153,16 +153,46 @@ class DecoderConvSuite(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
 
-        # 🔥 ALL must output out_ch
-        self.conv_low = nn.Conv3d(in_ch, out_ch, 1)
-        self.conv_high = nn.Conv3d(in_ch, out_ch, 1)
+        self.conv_low = nn.Conv3d(
+            in_ch, out_ch, 1
+        )
 
-        self.conv_3x3x1 = nn.Conv3d(in_ch, out_ch, (1,3,3), padding=(0,1,1))
-        self.conv_identity = nn.Conv3d(in_ch, out_ch, 1)
-        self.conv_depth = nn.Conv3d(in_ch, out_ch, (3,1,1), padding=(1,0,0))
+        self.conv_high = nn.Conv3d(
+            in_ch, out_ch, 1
+        )
+
+        self.conv_3x3x1 = nn.Conv3d(
+            in_ch,
+            out_ch,
+            (1, 3, 3),
+            padding=(0, 1, 1)
+        )
+
+        self.conv_identity = nn.Conv3d(
+            in_ch,
+            out_ch,
+            1
+        )
+
+        self.conv_depth = nn.Conv3d(
+            in_ch,
+            out_ch,
+            (3, 1, 1),
+            padding=(1, 0, 0)
+        )
+
+        # Explicit number of expert paths
+        self.num_paths = 5
 
     def forward(self, x):
-        low = F.avg_pool3d(x, (1,3,3), stride=1, padding=(0,1,1))
+
+        low = F.avg_pool3d(
+            x,
+            (1, 3, 3),
+            stride=1,
+            padding=(0, 1, 1)
+        )
+
         high = x - low
 
         feats = [
@@ -189,6 +219,7 @@ class DecoderBlock(nn.Module):
         super().__init__()
 
         self.upsample_enabled = upsample
+
         self.upsample = SpatialUpsample3D(
             scale_factor=2
         )
@@ -202,17 +233,12 @@ class DecoderBlock(nn.Module):
             out_ch
         )
 
-        # Number of decoder experts
-        self.num_kernels = self.conv_suite.num_paths
+        self.num_kernels = (
+            self.conv_suite.num_paths
+        )
 
         # ------------------------------------------------
-        # Decoder routing network
-        #
-        # IMPORTANT:
-        # This replaces w_E2.
-        #
-        # Routing is generated from decoder features
-        # rather than being supplied by the encoder.
+        # Decoder-side routing
         # ------------------------------------------------
 
         router_hidden = max(
@@ -226,7 +252,7 @@ class DecoderBlock(nn.Module):
                 in_ch,
                 router_hidden,
                 kernel_size=3,
-                padding=1,
+                padding=1
             ),
 
             nn.SiLU(),
@@ -234,15 +260,13 @@ class DecoderBlock(nn.Module):
             nn.Conv3d(
                 router_hidden,
                 self.num_kernels,
-                kernel_size=1,
-            ),
+                kernel_size=1
+            )
         )
 
         # ------------------------------------------------
-        # Optional smoothing/mixing
+        # Output
         # ------------------------------------------------
-
-        self.mixer = SmoothedSpatialKernelMixer()
 
         self.norm = nn.GroupNorm(
             8,
@@ -254,60 +278,39 @@ class DecoderBlock(nn.Module):
     def forward(
         self,
         x,
-        return_weights=False,
+        return_weights=False
     ):
 
-        # =================================================
-        # 1. Upsample
-        # =================================================
+        # ================================================
+        # Upsample
+        # ================================================
 
         if self.upsample_enabled:
 
             x = self.upsample(x)
 
-        # =================================================
-        # 2. Generate decoder routing
-        # =================================================
-        #
-        # x is the rich decoder representation.
-        #
-        # This is our new h_D2.
-        #
-        # w_dec = R_dec(h_D2)
-        #
-        # =================================================
+        # ================================================
+        # Decoder-side routing
+        # ================================================
 
-        routing_feat = x
+        logits = self.router(x)
 
-        logits = self.router(
-            routing_feat
-        )
-
-        # -------------------------------------------------
-        # Spatially varying expert probabilities
-        # -------------------------------------------------
-
-        w_dec = torch.softmax(
+        w_dec = F.softmax(
             logits,
             dim=1
         )
 
-        # =================================================
-        # 3. Generate decoder expert features
-        # =================================================
+        # ================================================
+        # Expert features
+        # ================================================
 
         feats = self.conv_suite(x)
 
-        assert len(feats) == self.num_kernels, (
-            f"Decoder expert mismatch: "
-            f"conv_suite returned {len(feats)} "
-            f"experts but router produces "
-            f"{self.num_kernels} weights."
-        )
+        assert len(feats) == self.num_kernels
 
-        # =================================================
-        # 4. Mix experts using w_dec
-        # =================================================
+        # ================================================
+        # Expert mixing
+        # ================================================
 
         y = torch.zeros_like(
             feats[0]
@@ -317,30 +320,27 @@ class DecoderBlock(nn.Module):
 
             y = (
                 y
-                + w_dec[:, i:i+1] * f
+                + w_dec[:, i:i+1]
+                * f
             )
 
-        # =================================================
-        # 5. Normalize + activation
-        # =================================================
+        # ================================================
+        # Normalization
+        # ================================================
 
         y = self.act(
             self.norm(y)
         )
 
-        # =================================================
-        # 6. Return
-        # =================================================
+        # ================================================
+        # Return
+        # ================================================
 
         if return_weights:
 
-            return (
-                y,
-                w_dec,
-            )
+            return y, w_dec
 
         return y
-            
 
 # --------------------------------------------------
 # Output refinement head (image space)
