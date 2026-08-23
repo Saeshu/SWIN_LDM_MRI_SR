@@ -164,7 +164,11 @@ class AutoEncoder(nn.Module):
     
         else:
     
-            z = self.dec2(z)
+            z = checkpoint(
+            self.dec2,
+            z,
+            use_reentrant=False,
+        )
     
             weights = None
     
