@@ -126,28 +126,72 @@ class AutoEncoder(nn.Module):
         self.dec0 = DecoderBlock(64, 32, upsample=False)
         self.out = OutputRefinementHead(32, out_ch=1)
 
-    def encode(self, x):
+    def encode(self, x, return_features=False):
+
+        features = {}
+    
+        # --------------------------------------------------
+        # Encoder block 0
+        # --------------------------------------------------
+    
         x = self.enc0(x)
+    
+        if return_features:
+            features["enc0"] = x
+    
         x = self.down0(x)
     
+        # --------------------------------------------------
+        # Encoder block 1
+        # --------------------------------------------------
+    
         x = self.enc1(x)
+    
+        if return_features:
+            features["enc1"] = x
+    
         x = self.down1(x)
-
-        out = self.enc2(x, return_weights=True)
-        
+    
+        # --------------------------------------------------
+        # Encoder block 2
+        # --------------------------------------------------
+    
+        out = self.enc2(
+            x,
+            return_weights=True,
+        )
+    
         if isinstance(out, tuple):
             x, w_E2 = out
-            # print("w_E2: ", w_E2.shape)
         else:
             x = out
             w_E2 = None
-            
+    
+        if return_features:
+            features["enc2"] = x
+    
+        # --------------------------------------------------
+        # Encoder block 3
+        # --------------------------------------------------
+    
         x = self.enc3(x)
     
-        # 🔥 TEMP FIX: make compatible with decoder
-       
+        if return_features:
+            features["enc3"] = x
     
+        # --------------------------------------------------
+        # Return
+        # --------------------------------------------------
+    
+        if return_features:
+            return {
+                "features": features,
+                "latent": x,
+                "w_E2": w_E2,
+            }
+
         return x, w_E2
+    
     def decode(
     self,
     z,
