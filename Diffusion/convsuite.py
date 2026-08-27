@@ -139,7 +139,7 @@ class TimeGatedConvSuite(nn.Module):
         ####################################################
         
         self.time_embed = SinusoidalTimeEmbedding(time_dim)
-        
+        self.anatomy_scale = 1.0
         ####################################################
         # Anatomy encoder
         ####################################################
@@ -349,9 +349,14 @@ class TimeGatedConvSuite(nn.Module):
             )
         if w_e2 is not None:
             gamma_map = gamma_scalar.view(-1,1,1,1,1)
-            
+            anatomy_component = self.anatomy_scale * anatomy
+            temporal_component = gamma_map * te_spatial
+
             # Broadcast timestep automatically
-            routing_feat = anatomy + gamma_map * te_spatial
+            routing_feat = (
+                anatomy_component
+                + temporal_component
+            )
 
             ####################################################
             # Routing
@@ -447,6 +452,6 @@ class TimeGatedConvSuite(nn.Module):
 
         if return_gates:
             # print(gate_out.mean(dim=0))
-            return out, gate_out, routing_feat.detach()
+            return out, gate_out, routing_feat.detach(), anatomy_component, temporal_component
 
         return out
