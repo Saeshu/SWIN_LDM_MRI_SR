@@ -215,18 +215,16 @@ class DecoderBlock(nn.Module):
         in_ch,
         out_ch,
         upsample=True,
+        use_routing=True,
     ):
         super().__init__()
 
         self.upsample_enabled = upsample
+        self.use_routing = use_routing
 
         self.upsample = SpatialUpsample3D(
             scale_factor=2
         )
-
-        # ------------------------------------------------
-        # Decoder expert suite
-        # ------------------------------------------------
 
         self.conv_suite = DecoderConvSuite(
             in_ch,
@@ -237,36 +235,38 @@ class DecoderBlock(nn.Module):
             self.conv_suite.num_paths
         )
 
-        # ------------------------------------------------
+        # ---------------------------------------------
         # Decoder-side routing
-        # ------------------------------------------------
+        # ---------------------------------------------
 
-        router_hidden = max(
-            32,
-            in_ch // 2
-        )
+        if self.use_routing:
 
-        self.router = nn.Sequential(
-
-            nn.Conv3d(
-                in_ch,
-                router_hidden,
-                kernel_size=3,
-                padding=1
-            ),
-
-            nn.SiLU(),
-
-            nn.Conv3d(
-                router_hidden,
-                self.num_kernels,
-                kernel_size=1
+            router_hidden = max(
+                32,
+                in_ch // 2
             )
-        )
 
-        # ------------------------------------------------
+            self.router = nn.Sequential(
+
+                nn.Conv3d(
+                    in_ch,
+                    router_hidden,
+                    kernel_size=3,
+                    padding=1
+                ),
+
+                nn.SiLU(),
+
+                nn.Conv3d(
+                    router_hidden,
+                    self.num_kernels,
+                    kernel_size=1
+                )
+            )
+
+        # ---------------------------------------------
         # Output
-        # ------------------------------------------------
+        # ---------------------------------------------
 
         self.norm = nn.GroupNorm(
             8,
@@ -281,40 +281,57 @@ class DecoderBlock(nn.Module):
         return_weights=False
     ):
 
-        # ================================================
+        # =============================================
         # Upsample
-        # ================================================
+        # =============================================
 
         if self.upsample_enabled:
-
             x = self.upsample(x)
 
-        # ================================================
-        # Decoder-side routing
-        # ================================================
-
-        logits = self.router(x)
-
-        w_dec = F.softmax(
-            logits,
-            dim=1
-        )
-
-        # ================================================
+        # =============================================
         # Expert features
-        # ================================================
+        # =============================================
 
         feats = self.conv_suite(x)
 
         assert len(feats) == self.num_kernels
 
-        # ================================================
-        # Expert mixing
-        # ================================================
+        # =============================================
+        # Routing
+        # =============================================
 
-        y = torch.zeros_like(
-            feats[0]
-        )
+        if self.use_routing:
+
+            logits = self.router(x)
+
+            w_dec = F.softmax(
+                logits,
+                dim=1
+            )
+
+        else:
+
+            # Uniform routing
+            B, _, D, H, W = x.shape
+
+            w_dec = torch.full(
+                (
+                    B,
+                    self.num_kernels,
+                    D,
+                    H,
+                    W
+                ),
+                1.0 / self.num_kernels,
+                device=x.device,
+                dtype=x.dtype
+            )
+
+        # =============================================
+        # Expert mixing
+        # =============================================
+
+        y = torch.zeros_like(feats[0])
 
         for i, f in enumerate(feats):
 
@@ -324,20 +341,15 @@ class DecoderBlock(nn.Module):
                 * f
             )
 
-        # ================================================
+        # =============================================
         # Normalization
-        # ================================================
+        # =============================================
 
         y = self.act(
             self.norm(y)
         )
 
-        # ================================================
-        # Return
-        # ================================================
-
         if return_weights:
-
             return y, w_dec
 
         return y
