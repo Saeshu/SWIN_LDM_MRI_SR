@@ -153,104 +153,191 @@ class DecoderConvSuite(nn.Module):
 # --------------------------------------------------
 
 class DecoderBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, upsample=True):
+
+    def __init__(
+        self,
+        in_ch,
+        out_ch,
+        upsample=True,
+        use_routing=True,
+    ):
         super().__init__()
 
         self.upsample_enabled = upsample
-        self.upsample = SpatialUpsample3D(scale_factor=2)
+        self.use_routing = use_routing
 
-        self.conv_suite = DecoderConvSuite(in_ch, out_ch)
+        # ------------------------------------------------
+        # Frequency fusion
+        # ------------------------------------------------
 
-        # 🔥 plug-in mixer
-        self.mixer = SmoothedSpatialKernelMixer()
+        self.freq_fuse = nn.Conv3d(
+            in_ch * 2,
+            in_ch,
+            kernel_size=1
+        )
 
-        self.norm = nn.GroupNorm(8, out_ch)
+        # ------------------------------------------------
+        # Expert bank
+        # ------------------------------------------------
+
+        self.conv_suite = DecoderConvSuite(
+            in_ch,
+            out_ch
+        )
+
+        self.num_kernels = (
+            self.conv_suite.num_paths
+        )
+
+        # ------------------------------------------------
+        # Router
+        # ------------------------------------------------
+
+        if self.use_routing:
+
+            router_hidden = max(
+                32,
+                in_ch // 2
+            )
+
+            self.router = nn.Sequential(
+
+                nn.Conv3d(
+                    in_ch,
+                    router_hidden,
+                    kernel_size=3,
+                    padding=1
+                ),
+
+                nn.SiLU(),
+
+                nn.Conv3d(
+                    router_hidden,
+                    self.num_kernels,
+                    kernel_size=1
+                )
+            )
+
+        # ------------------------------------------------
+        # Output
+        # ------------------------------------------------
+
+        self.norm = nn.GroupNorm(
+            8,
+            out_ch
+        )
+
         self.act = nn.SiLU()
 
-    def forward(self, x, w_E2=None, return_weights=False):
+    def forward(
+        self,
+        x,
+        return_weights=False
+    ):
+
+        # =================================================
+        # 1. Frequency decomposition
+        # =================================================
+
+        low = F.avg_pool3d(
+            x,
+            kernel_size=(1, 3, 3),
+            stride=1,
+            padding=(0, 1, 1)
+        )
+
+        high = x - low
+
+        # =================================================
+        # 2. Fuse low + high
+        # =================================================
+
+        freq = torch.cat(
+            [low, high],
+            dim=1
+        )
+
+        freq = self.freq_fuse(freq)
+
+        # =================================================
+        # 3. Routing
+        # =================================================
+
+        if self.use_routing:
+
+            logits = self.router(freq)
+
+            w_dec = F.softmax(
+                logits,
+                dim=1
+            )
+
+        else:
+
+            B, _, D, H, W = freq.shape
+
+            w_dec = torch.full(
+                (
+                    B,
+                    self.num_kernels,
+                    D,
+                    H,
+                    W
+                ),
+                1.0 / self.num_kernels,
+                device=freq.device,
+                dtype=freq.dtype
+            )
+
+        # =================================================
+        # 4. Expert processing
+        # =================================================
+
+        feats = self.conv_suite(freq)
+
+        # =================================================
+        # 5. Adaptive mixing
+        # =================================================
+
+        y = torch.zeros_like(
+            feats[0]
+        )
+
+        for i, f in enumerate(feats):
+
+            y = (
+                y
+                + w_dec[:, i:i+1] * f
+            )
+
+        # =================================================
+        # 6. Normalization + activation
+        # =================================================
+
+        y = self.act(
+            self.norm(y)
+        )
+
+        # =================================================
+        # 7. Upsample AFTER adaptive processing
+        # =================================================
 
         if self.upsample_enabled:
-            x = self.upsample(x)
-    
-        feats = self.conv_suite(x)
-        # print("decoder K:", len(feats))
-        # print("input x:", x.shape)
-        if w_E2 is not None:
-            y, weights = self.mixer(feats, w_E2, return_weights=True)
-        else:
-            y = sum(feats) / len(feats)
-            weights = None
-    
-        y = self.act(self.norm(y))
-    
-        if return_weights:
-            return y, weights
-    
-        return y
-        
-        # y = self.heavy(x, encoder_kernel_skip)
-    
-        #print("AFTER heavy, y:", None if y is None else y.shape)
-    
-        #assert y is not None, "heavy() returned None ❌"
-    
-        # y = self.act(self.norm(y))
-    
-    
-    
-    def heavy(self, x, encoder_kernel_skip):
-        
-        feats = self.conv_suite(x)
-    
-        #print("feats:", len(feats), feats[0].shape)
-    
-        B, C, D, H, W = feats[0].shape
-        
-        if isinstance(encoder_kernel_skip, torch.Tensor) and encoder_kernel_skip.dim() == 5:
 
-            weights = encoder_kernel_skip
-        
-            weights = weights / (weights.std(dim=(2,3,4), keepdim=True) + 1e-6)
-        
-            weights = F.avg_pool3d(
-                weights,
-                kernel_size=(1, 3, 3),
-                stride=1,
-                padding=(0, 1, 1)
+            y = F.interpolate(
+                y,
+                scale_factor=(1, 2, 2),
+                mode="nearest"
             )
-        
-            weights = F.interpolate(
-                weights,
-                size=x.shape[2:],
-                mode="trilinear",
-                align_corners=False
-            )
-        
-            K = min(weights.shape[1], self.num_dec_kernels)
-            weights = weights[:, :K]
-            feats = feats[:K]
-        
-            weights = F.softmax(weights, dim=1)
-        
-        else:
-            # 🔥 fallback: uniform weights
-            K = min(len(feats), self.num_dec_kernels)
-            feats = feats[:K]
-        
-            weights = torch.ones(
-                (x.shape[0], K, x.shape[2], x.shape[3], x.shape[4]),
-                device=x.device
-            ) / K
-    
-        y = torch.zeros_like(feats[0])
-    
-        for i, f in enumerate(feats):
-            # weights = encoder_kernel_skip
-            # assert weights.shape[1] > i, f"weight mismatch at {i}"
-            y = y + weights[:, i:i+1] * f
-    
-        #print("RETURNING y:", y.shape)
-    
+
+        # =================================================
+        # 8. Return
+        # =================================================
+
+        if return_weights:
+
+            return y, w_dec
+
         return y
             
 
