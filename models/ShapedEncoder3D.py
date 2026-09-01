@@ -10,7 +10,6 @@ import torch.nn.functional as F
 class AnisotropicConvSuite(nn.Module):
 
     def __init__(self, in_ch, out_ch):
-
         super().__init__()
 
         self.kernels = nn.ModuleList([
@@ -29,7 +28,7 @@ class AnisotropicConvSuite(nn.Module):
                 )
             ),
 
-            # 2. High-pass / edges
+            # 2. Pointwise
             nn.Conv3d(
                 in_ch,
                 out_ch,
@@ -52,7 +51,7 @@ class AnisotropicConvSuite(nn.Module):
                 padding=(1, 0, 0)
             ),
 
-            # 5. Identity-like learned projection
+            # 5. Identity-like
             nn.Conv3d(
                 in_ch,
                 out_ch,
@@ -63,12 +62,30 @@ class AnisotropicConvSuite(nn.Module):
         self.num_paths = len(self.kernels)
 
     def forward(self, x):
+        """
+        Original behavior.
+        Returns all expert outputs.
+        Used by attention blocks.
+        """
 
         return [
-            conv(x)
-            for conv in self.kernels
+            expert(x)
+            for expert in self.kernels
         ]
 
+    def forward_sequential(self, x, weights):
+
+        y = self.kernels[0](x) * weights[0]
+    
+        for i in range(1, self.num_paths):
+    
+            feat = self.kernels[i](x)
+    
+            y = y + weights[i] * feat
+    
+            del feat
+    
+        return y
 
 # ============================================================
 # Window pooling / tokenization
@@ -322,6 +339,57 @@ class AnisotropicSwinBlock(nn.Module):
 
         B, C, D, H, W = x.shape
 
+        if not self.use_attention:
+
+            # ----------------------------------------------------
+            # Global learned routing
+            # ----------------------------------------------------
+    
+            weights = F.softmax(
+                self.alpha,
+                dim=0
+            )
+    
+            # ----------------------------------------------------
+            # Sequential expert execution
+            # ----------------------------------------------------
+    
+            y = self.conv_suite.forward_sequential(
+                x,
+                weights
+            )
+    
+            # ----------------------------------------------------
+            # Normalize + activation
+            # ----------------------------------------------------
+    
+            y = self.norm(y)
+            y = self.act(y)
+    
+            # ----------------------------------------------------
+            # Return
+            # ----------------------------------------------------
+    
+            if return_weights:
+    
+                weights_spatial = weights.view(
+                    1,
+                    self.num_kernels,
+                    1,
+                    1,
+                    1
+                ).expand(
+                    B,
+                    -1,
+                    D,
+                    H,
+                    W
+                )
+    
+                return y, weights_spatial
+    
+            return y
+        
         # ====================================================
         # High-frequency extraction
         # ====================================================
@@ -430,6 +498,7 @@ class AnisotropicSwinBlock(nn.Module):
 
         feats = self.conv_suite(x)
 
+        
         # ====================================================
         # ROUTING
         # ====================================================
