@@ -121,9 +121,32 @@ class AutoEncoder(nn.Module):
         self.latent_proj = nn.Conv3d(256, 4, kernel_size=1)
 
         # ---- decoder ----
-        self.dec2 = DecoderBlock(256, 128, upsample=True, use_routing=True)
-        self.dec1 = DecoderBlock(128, 64, upsample=True, use_routing=False)
-        self.dec0 = DecoderBlock(64, 32, upsample=False, use_routing=False)
+        self.dec2 = DecoderBlock(
+            256,
+            128,
+            upsample=True,
+            use_routing=True,
+            spatial_reduction=False,
+            channel_reduction=True
+        )
+        
+        self.dec1 = DecoderBlock(
+            128,
+            64,
+            upsample=True,
+            use_routing=False,
+            spatial_reduction=False,
+            channel_reduction=True
+        )
+        
+        self.dec0 = DecoderBlock(
+            64,
+            32,
+            upsample=False,
+            use_routing=False,
+            spatial_reduction=False,
+            channel_reduction=True
+        )
         self.out = OutputRefinementHead(32, out_ch=1)
 
     def encode(self, x, return_features=False):
