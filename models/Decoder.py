@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
-from torch.utils.checkpoint import checkpoint
+# from einops import rearrange
+# from torch.utils.checkpoint import checkpoint
 
 
 
@@ -237,10 +237,6 @@ class DecoderBlock(nn.Module):
             self.conv_suite.num_paths
         )
 
-        # ---------------------------------------------
-        # Decoder-side routing
-        # ---------------------------------------------
-
         if self.use_routing:
 
             router_hidden = max(
@@ -249,7 +245,6 @@ class DecoderBlock(nn.Module):
             )
 
             self.router = nn.Sequential(
-
                 nn.Conv3d(
                     in_ch,
                     router_hidden,
@@ -266,10 +261,6 @@ class DecoderBlock(nn.Module):
                 )
             )
 
-        # ---------------------------------------------
-        # Output
-        # ---------------------------------------------
-
         self.norm = nn.GroupNorm(
             8,
             out_ch
@@ -283,24 +274,22 @@ class DecoderBlock(nn.Module):
         return_weights=False
     ):
 
-        # =============================================
+        # ---------------------------------------------
         # Upsample
-        # =============================================
+        # ---------------------------------------------
 
         if self.upsample_enabled:
             x = self.upsample(x)
 
-        # =============================================
-        # Expert features
-        # =============================================
+        # ---------------------------------------------
+        # Experts
+        # ---------------------------------------------
 
         feats = self.conv_suite(x)
 
-        assert len(feats) == self.num_kernels
-
-        # =============================================
-        # Routing
-        # =============================================
+        # ---------------------------------------------
+        # Routing + mixing
+        # ---------------------------------------------
 
         if self.use_routing:
 
@@ -311,51 +300,57 @@ class DecoderBlock(nn.Module):
                 dim=1
             )
 
+            y = (
+                w_dec[:, 0:1]
+                * feats[0]
+            )
+
+            for i in range(
+                1,
+                self.num_kernels
+            ):
+
+                y = (
+                    y
+                    + w_dec[:, i:i+1]
+                    * feats[i]
+                )
+
         else:
 
-            # Uniform routing
-            B, _, D, H, W = x.shape
+            weight = 1.0 / self.num_kernels
 
-            w_dec = torch.full(
-                (
-                    B,
-                    self.num_kernels,
-                    D,
-                    H,
-                    W
-                ),
-                1.0 / self.num_kernels,
-                device=x.device,
-                dtype=x.dtype
-            )
+            y = feats[0] * weight
 
-        # =============================================
-        # Expert mixing
-        # =============================================
+            for i in range(
+                1,
+                self.num_kernels
+            ):
 
-        y = torch.zeros_like(feats[0])
+                y = (
+                    y
+                    + feats[i] * weight
+                )
 
-        for i, f in enumerate(feats):
+            w_dec = None
 
-            y = (
-                y
-                + w_dec[:, i:i+1]
-                * f
-            )
-
-        # =============================================
-        # Normalization
-        # =============================================
+        # ---------------------------------------------
+        # Norm + activation
+        # ---------------------------------------------
 
         y = self.act(
             self.norm(y)
         )
 
+        # ---------------------------------------------
+        # Return
+        # ---------------------------------------------
+
         if return_weights:
+
             return y, w_dec
 
         return y
-
 # --------------------------------------------------
 # Output refinement head (image space)
 # --------------------------------------------------
