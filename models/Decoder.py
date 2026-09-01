@@ -5,14 +5,13 @@ import torch.nn.functional as F
 
 # ============================================================
 # Spatial upsampling
+# H/W only — depth is unchanged
 # ============================================================
 
 class SpatialUpsample3D(nn.Module):
 
     def __init__(self, scale_factor=2):
-
         super().__init__()
-
         self.scale_factor = scale_factor
 
     def forward(self, x):
@@ -24,7 +23,7 @@ class SpatialUpsample3D(nn.Module):
             0, 2, 1, 3, 4
         ).contiguous()
 
-        x = x.view(
+        x = x.reshape(
             B * D,
             C,
             H,
@@ -37,9 +36,9 @@ class SpatialUpsample3D(nn.Module):
             mode="nearest"
         )
 
-        _, _, H2, W2 = x.shape
+        H2, W2 = x.shape[-2:]
 
-        x = x.view(
+        x = x.reshape(
             B,
             D,
             C,
@@ -48,18 +47,16 @@ class SpatialUpsample3D(nn.Module):
         )
 
         x = x.permute(
-            0,
-            2,
-            1,
-            3,
-            4
+            0, 2, 1, 3, 4
         ).contiguous()
 
         return x
 
 
 # ============================================================
-# Decoder expert suite
+# Decoder Expert Suite
+#
+# Experts operate on the tensor supplied to the suite.
 # ============================================================
 
 class DecoderConvSuite(nn.Module):
@@ -69,8 +66,11 @@ class DecoderConvSuite(nn.Module):
         in_ch,
         out_ch
     ):
-
         super().__init__()
+
+        # ----------------------------------------------------
+        # Low-frequency expert
+        # ----------------------------------------------------
 
         self.conv_low = nn.Conv3d(
             in_ch,
@@ -78,24 +78,40 @@ class DecoderConvSuite(nn.Module):
             kernel_size=1
         )
 
+        # ----------------------------------------------------
+        # High-frequency expert
+        # ----------------------------------------------------
+
         self.conv_high = nn.Conv3d(
             in_ch,
             out_ch,
             kernel_size=1
         )
 
-        self.conv_3x3x1 = nn.Conv3d(
+        # ----------------------------------------------------
+        # In-plane spatial expert
+        # ----------------------------------------------------
+
+        self.conv_spatial = nn.Conv3d(
             in_ch,
             out_ch,
             kernel_size=(1, 3, 3),
             padding=(0, 1, 1)
         )
 
-        self.conv_identity = nn.Conv3d(
+        # ----------------------------------------------------
+        # Pointwise expert
+        # ----------------------------------------------------
+
+        self.conv_point = nn.Conv3d(
             in_ch,
             out_ch,
             kernel_size=1
         )
+
+        # ----------------------------------------------------
+        # Depth expert
+        # ----------------------------------------------------
 
         self.conv_depth = nn.Conv3d(
             in_ch,
@@ -108,9 +124,9 @@ class DecoderConvSuite(nn.Module):
 
     def forward(self, x):
 
-        # ----------------------------------------------------
-        # Low frequency
-        # ----------------------------------------------------
+        # ====================================================
+        # Frequency decomposition
+        # ====================================================
 
         low = F.avg_pool3d(
             x,
@@ -119,27 +135,23 @@ class DecoderConvSuite(nn.Module):
             padding=(0, 1, 1)
         )
 
-        # ----------------------------------------------------
-        # High frequency
-        # ----------------------------------------------------
-
         high = x - low
 
-        # ----------------------------------------------------
-        # Experts
-        # ----------------------------------------------------
+        # ====================================================
+        # Expert paths
+        # ====================================================
 
-        return [
+        return (
             self.conv_low(low),
             self.conv_high(high),
-            self.conv_3x3x1(x),
-            self.conv_identity(x),
+            self.conv_spatial(x),
+            self.conv_point(x),
             self.conv_depth(x),
-        ]
+        )
 
 
 # ============================================================
-# Decoder block
+# Optimized Decoder Block
 # ============================================================
 
 class DecoderBlock(nn.Module):
@@ -149,42 +161,84 @@ class DecoderBlock(nn.Module):
         in_ch,
         out_ch,
         upsample=True,
-        use_routing=True
+        use_routing=True,
+        spatial_reduction=True,
+        channel_reduction=True,
     ):
-
         super().__init__()
 
         self.upsample_enabled = upsample
         self.use_routing = use_routing
+        self.spatial_reduction_enabled = spatial_reduction
+        self.channel_reduction_enabled = channel_reduction
 
-        self.upsample = SpatialUpsample3D(
-            scale_factor=2
-        )
+        # ====================================================
+        # Spatial reduction
+        #
+        # Experts operate at reduced H/W.
+        # ====================================================
+
+        if self.spatial_reduction_enabled:
+
+            self.reduce_spatial = nn.AvgPool3d(
+                kernel_size=(1, 2, 2),
+                stride=(1, 2, 2)
+            )
+
+        # ====================================================
+        # Channel bottleneck
+        # ====================================================
+
+        if self.channel_reduction_enabled:
+
+            reduced_ch = max(
+                out_ch,
+                in_ch // 2
+            )
+
+            self.reduced_ch = reduced_ch
+
+            self.channel_down = nn.Conv3d(
+                in_ch,
+                reduced_ch,
+                kernel_size=1
+            )
+
+        else:
+
+            reduced_ch = in_ch
+            self.reduced_ch = in_ch
+
+        # ====================================================
+        # Five experts
+        # ====================================================
 
         self.conv_suite = DecoderConvSuite(
-            in_ch,
-            out_ch
+            reduced_ch,
+            reduced_ch
         )
 
         self.num_kernels = (
             self.conv_suite.num_paths
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # Router
-        # ----------------------------------------------------
+        #
+        # Router operates at reduced resolution.
+        # ====================================================
 
         if self.use_routing:
 
             router_hidden = max(
-                32,
-                in_ch // 2
+                16,
+                reduced_ch // 2
             )
 
             self.router = nn.Sequential(
 
                 nn.Conv3d(
-                    in_ch,
+                    reduced_ch,
                     router_hidden,
                     kernel_size=3,
                     padding=1
@@ -199,9 +253,21 @@ class DecoderBlock(nn.Module):
                 )
             )
 
-        # ----------------------------------------------------
+        # ====================================================
+        # Channel expansion
+        # ====================================================
+
+        if self.channel_reduction_enabled:
+
+            self.channel_up = nn.Conv3d(
+                reduced_ch,
+                out_ch,
+                kernel_size=1
+            )
+
+        # ====================================================
         # Output
-        # ----------------------------------------------------
+        # ====================================================
 
         self.norm = nn.GroupNorm(
             8,
@@ -210,6 +276,16 @@ class DecoderBlock(nn.Module):
 
         self.act = nn.SiLU()
 
+        # ====================================================
+        # Upsampler
+        # ====================================================
+
+        if self.upsample_enabled:
+
+            self.upsample = SpatialUpsample3D(
+                scale_factor=2
+            )
+
     def forward(
         self,
         x,
@@ -217,21 +293,29 @@ class DecoderBlock(nn.Module):
     ):
 
         # ====================================================
-        # Upsampling
+        # 1. Spatial reduction
         # ====================================================
 
-        if self.upsample_enabled:
+        if self.spatial_reduction_enabled:
 
-            x = self.upsample(x)
+            x = self.reduce_spatial(x)
 
         # ====================================================
-        # Expert computation
+        # 2. Channel reduction
+        # ====================================================
+
+        if self.channel_reduction_enabled:
+
+            x = self.channel_down(x)
+
+        # ====================================================
+        # 3. Expert computation
         # ====================================================
 
         feats = self.conv_suite(x)
 
         # ====================================================
-        # Routing + mixing
+        # 4. Routing
         # ====================================================
 
         if self.use_routing:
@@ -244,7 +328,7 @@ class DecoderBlock(nn.Module):
             )
 
             # ------------------------------------------------
-            # Avoid zeros_like allocation
+            # Avoid zeros_like()
             # ------------------------------------------------
 
             y = (
@@ -266,37 +350,47 @@ class DecoderBlock(nn.Module):
         else:
 
             # ------------------------------------------------
-            # Uniform mixing without constructing:
+            # Uniform mixing.
             #
-            # [B, 5, D, H, W]
-            #
+            # No routing tensor is allocated.
             # ------------------------------------------------
 
-            weight = (
-                1.0 / self.num_kernels
-            )
-
-            y = feats[0] * weight
+            y = feats[0]
 
             for i in range(
                 1,
                 self.num_kernels
             ):
 
-                y = (
-                    y
-                    + feats[i] * weight
-                )
+                y = y + feats[i]
+
+            y = y / self.num_kernels
 
             weights = None
 
         # ====================================================
-        # Normalization
+        # 5. Channel expansion
         # ====================================================
 
-        y = self.act(
-            self.norm(y)
-        )
+        if self.channel_reduction_enabled:
+
+            y = self.channel_up(y)
+
+        # ====================================================
+        # 6. Normalization
+        # ====================================================
+
+        y = self.norm(y)
+
+        y = self.act(y)
+
+        # ====================================================
+        # 7. Upsampling
+        # ====================================================
+
+        if self.upsample_enabled:
+
+            y = self.upsample(y)
 
         # ====================================================
         # Return
@@ -310,7 +404,7 @@ class DecoderBlock(nn.Module):
 
 
 # ============================================================
-# Output refinement head
+# Output Refinement Head
 # ============================================================
 
 class OutputRefinementHead(nn.Module):
@@ -320,7 +414,6 @@ class OutputRefinementHead(nn.Module):
         in_ch,
         out_ch=1
     ):
-
         super().__init__()
 
         self.spatial = nn.Conv3d(
