@@ -4,8 +4,26 @@ import torch.nn.functional as F
 # from einops import rearrange
 # from torch.utils.checkpoint import checkpoint
 
+#try ablation with spatial upsample3D
+class NativeSpatialUpsample3D(nn.Module):
 
+    def __init__(self, scale_factor=2):
+        super().__init__()
 
+        self.scale_factor = scale_factor
+
+    def forward(self, x):
+
+        return F.interpolate(
+            x,
+            scale_factor=(
+                1,
+                self.scale_factor,
+                self.scale_factor
+            ),
+            mode="nearest"
+        )
+        
 class SpatialKernelMixer(nn.Module):
     def __init__(self):
         super().__init__()
