@@ -1,152 +1,36 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from einops import rearrange
-# from torch.utils.checkpoint import checkpoint
 
-#try ablation with spatial upsample3D
-class NativeSpatialUpsample3D(nn.Module):
 
-    def __init__(self, scale_factor=2):
-        super().__init__()
+# ============================================================
+# Spatial upsampling
+# ============================================================
 
-        self.scale_factor = scale_factor
-
-    def forward(self, x):
-
-        return F.interpolate(
-            x,
-            scale_factor=(
-                1,
-                self.scale_factor,
-                self.scale_factor
-            ),
-            mode="nearest"
-        )
-        
-class SpatialKernelMixer(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, feats, w, return_weights=False):
-
-        w = F.interpolate(w, size=feats[0].shape[2:], mode="trilinear", align_corners=False)
-        
-        weights = F.softmax(w * 5.0, dim=1)
-        # print("w shape:", w.shape)
-        # print("num feats:", len(feats))
-        # print("feat shape:", feats[0].shape)
-        y = torch.zeros_like(feats[0])
-        for i, f in enumerate(feats):
-            y = y + weights[:, i:i+1] * f
-    
-        if return_weights:
-            return y, weights
-    
-        return y
-    
-class SmoothedSpatialKernelMixer(SpatialKernelMixer):
-    def __init__(self, smooth=False, topk=2, temp=1.5):
-        super().__init__()
-        self.smooth = smooth
-        self.topk = topk
-        self.temp = temp
-
-    def forward(self, feats, w, return_weights=False):
-        assert all(f.shape[1] == feats[0].shape[1] for f in feats), \
-            "All kernel outputs must have same channel dim"
-
-        # -----------------------------
-        # Match spatial resolution
-        # -----------------------------
-        w = F.interpolate(
-            w,
-            size=feats[0].shape[2:],
-            mode="trilinear",
-            align_corners=False
-        ).float().contiguous()
-
-        # -----------------------------
-        # (OPTIONAL) smoothing — OFF by default
-        # -----------------------------
-        if self.smooth:
-            w = F.avg_pool3d(w, (1,3,3), 1, (0,1,1))
-
-        # -----------------------------
-        # Competition (center across kernels)
-        # -----------------------------
-        w = w - w.mean(dim=1, keepdim=True)
-
-        # -----------------------------
-        # Normalize across kernels
-        # -----------------------------
-        std = torch.clamp(w.std(dim=1, keepdim=True), min=1e-3)
-        w = w / std
-
-        # -----------------------------
-        # Break symmetry (important)
-        # -----------------------------
-        w = w + 0.01 * torch.randn_like(w)
-
-        # -----------------------------
-        # Clamp for stability
-        # -----------------------------
-        w = torch.clamp(w, -3.0, 3.0)
-
-        # -----------------------------
-        # Sharper softmax (CRITICAL)
-        # -----------------------------
-        weights = F.softmax(w / self.temp, dim=1)
-
-        # -----------------------------
-        # 🔥 TOP-K ROUTING (REAL FIX)
-        # -----------------------------
-        if self.topk is not None:
-            vals, idx = torch.topk(weights, k=self.topk, dim=1)
-
-            mask = torch.zeros_like(weights)
-            mask.scatter_(1, idx, 1.0)
-
-            weights = weights * mask
-            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
-
-        # -----------------------------
-        # 🔥 Mixing (residual-style — better)
-        # -----------------------------
-        y = torch.zeros_like(feats[0])
-
-        for i, f in enumerate(feats):
-            y = y + weights[:, i:i+1] * f
-
-        if return_weights:
-            return y, weights
-
-        return y
-# --------------------------------------------------
-# Spatial upsampling (H, W only)
-# --------------------------------------------------
 class SpatialUpsample3D(nn.Module):
-    """
-    Memory-safe spatial upsampling:
-    - Upsamples H/W only
-    - Treats depth as batch
-    """
 
     def __init__(self, scale_factor=2):
+
         super().__init__()
+
         self.scale_factor = scale_factor
 
     def forward(self, x):
-        """
-        x: [B, C, D, H, W]
-        """
+
         B, C, D, H, W = x.shape
 
         # Treat depth as batch
-        x = x.permute(0, 2, 1, 3, 4).contiguous()  # [B, D, C, H, W]
-        x = x.view(B * D, C, H, W)                # [B·D, C, H, W]
+        x = x.permute(
+            0, 2, 1, 3, 4
+        ).contiguous()
 
-        # 2D upsample (cheap & safe)
+        x = x.view(
+            B * D,
+            C,
+            H,
+            W
+        )
+
         x = F.interpolate(
             x,
             scale_factor=self.scale_factor,
@@ -155,21 +39,37 @@ class SpatialUpsample3D(nn.Module):
 
         _, _, H2, W2 = x.shape
 
-        # Restore 3D structure
-        x = x.view(B, D, C, H2, W2)
-        x = x.permute(0, 2, 1, 3, 4).contiguous()  # [B, C, D, H2, W2]
+        x = x.view(
+            B,
+            D,
+            C,
+            H2,
+            W2
+        )
+
+        x = x.permute(
+            0,
+            2,
+            1,
+            3,
+            4
+        ).contiguous()
 
         return x
 
 
-
-# --------------------------------------------------
-# Decoder convolution suite (reconstruction-focused)
-# --------------------------------------------------
+# ============================================================
+# Decoder expert suite
+# ============================================================
 
 class DecoderConvSuite(nn.Module):
 
-    def __init__(self, in_ch, out_ch):
+    def __init__(
+        self,
+        in_ch,
+        out_ch
+    ):
+
         super().__init__()
 
         self.conv_low = nn.Conv3d(
@@ -208,6 +108,10 @@ class DecoderConvSuite(nn.Module):
 
     def forward(self, x):
 
+        # ----------------------------------------------------
+        # Low frequency
+        # ----------------------------------------------------
+
         low = F.avg_pool3d(
             x,
             kernel_size=(1, 3, 3),
@@ -215,7 +119,15 @@ class DecoderConvSuite(nn.Module):
             padding=(0, 1, 1)
         )
 
+        # ----------------------------------------------------
+        # High frequency
+        # ----------------------------------------------------
+
         high = x - low
+
+        # ----------------------------------------------------
+        # Experts
+        # ----------------------------------------------------
 
         return [
             self.conv_low(low),
@@ -224,9 +136,11 @@ class DecoderConvSuite(nn.Module):
             self.conv_identity(x),
             self.conv_depth(x),
         ]
-# --------------------------------------------------
-# Decoder block (upsample + conv suite + kernel mixing)
-# --------------------------------------------------
+
+
+# ============================================================
+# Decoder block
+# ============================================================
 
 class DecoderBlock(nn.Module):
 
@@ -235,8 +149,9 @@ class DecoderBlock(nn.Module):
         in_ch,
         out_ch,
         upsample=True,
-        use_routing=True,
+        use_routing=True
     ):
+
         super().__init__()
 
         self.upsample_enabled = upsample
@@ -255,6 +170,10 @@ class DecoderBlock(nn.Module):
             self.conv_suite.num_paths
         )
 
+        # ----------------------------------------------------
+        # Router
+        # ----------------------------------------------------
+
         if self.use_routing:
 
             router_hidden = max(
@@ -263,6 +182,7 @@ class DecoderBlock(nn.Module):
             )
 
             self.router = nn.Sequential(
+
                 nn.Conv3d(
                     in_ch,
                     router_hidden,
@@ -279,6 +199,10 @@ class DecoderBlock(nn.Module):
                 )
             )
 
+        # ----------------------------------------------------
+        # Output
+        # ----------------------------------------------------
+
         self.norm = nn.GroupNorm(
             8,
             out_ch
@@ -292,34 +216,39 @@ class DecoderBlock(nn.Module):
         return_weights=False
     ):
 
-        # ---------------------------------------------
-        # Upsample
-        # ---------------------------------------------
+        # ====================================================
+        # Upsampling
+        # ====================================================
 
         if self.upsample_enabled:
+
             x = self.upsample(x)
 
-        # ---------------------------------------------
-        # Experts
-        # ---------------------------------------------
+        # ====================================================
+        # Expert computation
+        # ====================================================
 
         feats = self.conv_suite(x)
 
-        # ---------------------------------------------
+        # ====================================================
         # Routing + mixing
-        # ---------------------------------------------
+        # ====================================================
 
         if self.use_routing:
 
             logits = self.router(x)
 
-            w_dec = F.softmax(
+            weights = F.softmax(
                 logits,
                 dim=1
             )
 
+            # ------------------------------------------------
+            # Avoid zeros_like allocation
+            # ------------------------------------------------
+
             y = (
-                w_dec[:, 0:1]
+                weights[:, 0:1]
                 * feats[0]
             )
 
@@ -330,13 +259,22 @@ class DecoderBlock(nn.Module):
 
                 y = (
                     y
-                    + w_dec[:, i:i+1]
+                    + weights[:, i:i+1]
                     * feats[i]
                 )
 
         else:
 
-            weight = 1.0 / self.num_kernels
+            # ------------------------------------------------
+            # Uniform mixing without constructing:
+            #
+            # [B, 5, D, H, W]
+            #
+            # ------------------------------------------------
+
+            weight = (
+                1.0 / self.num_kernels
+            )
 
             y = feats[0] * weight
 
@@ -350,39 +288,41 @@ class DecoderBlock(nn.Module):
                     + feats[i] * weight
                 )
 
-            w_dec = None
+            weights = None
 
-        # ---------------------------------------------
-        # Norm + activation
-        # ---------------------------------------------
+        # ====================================================
+        # Normalization
+        # ====================================================
 
         y = self.act(
             self.norm(y)
         )
 
-        # ---------------------------------------------
+        # ====================================================
         # Return
-        # ---------------------------------------------
+        # ====================================================
 
         if return_weights:
 
-            return y, w_dec
+            return y, weights
 
         return y
-# --------------------------------------------------
-# Output refinement head (image space)
-# --------------------------------------------------
+
+
+# ============================================================
+# Output refinement head
+# ============================================================
 
 class OutputRefinementHead(nn.Module):
-    """
-    Final reconstruction head.
-    Converts decoder features into image space.
-    """
 
-    def __init__(self, in_ch, out_ch=1):
+    def __init__(
+        self,
+        in_ch,
+        out_ch=1
+    ):
+
         super().__init__()
 
-        # Spatial sharpening
         self.spatial = nn.Conv3d(
             in_ch,
             out_ch,
@@ -390,7 +330,6 @@ class OutputRefinementHead(nn.Module):
             padding=(0, 1, 1)
         )
 
-        # Gentle depth consistency
         self.depth = nn.Conv3d(
             in_ch,
             out_ch,
@@ -399,4 +338,8 @@ class OutputRefinementHead(nn.Module):
         )
 
     def forward(self, x):
-        return self.spatial(x) + 0.3 * self.depth(x)
+
+        return (
+            self.spatial(x)
+            + 0.3 * self.depth(x)
+        )
