@@ -7,6 +7,13 @@ import torch.nn.functional as F
 # Spatial upsampling
 # H/W only — depth is unchanged
 # ============================================================
+def mem(tag):
+    torch.cuda.synchronize()
+    print(
+        tag,
+        f"alloc={torch.cuda.memory_allocated()/1024**3:.3f} GB",
+        f"peak={torch.cuda.max_memory_allocated()/1024**3:.3f} GB"
+    )
 
 class SpatialUpsample3D(nn.Module):
 
@@ -149,6 +156,50 @@ class DecoderConvSuite(nn.Module):
             self.conv_depth(x),
         )
 
+    def forward_sequential(self, x):
+
+        def mem(tag):
+            torch.cuda.synchronize()
+            print(
+                f"{tag:<25}"
+                f"alloc={torch.cuda.memory_allocated()/1024**3:.3f} GB  "
+                f"peak={torch.cuda.max_memory_allocated()/1024**3:.3f} GB"
+            )
+    
+        low = F.avg_pool3d(
+            x,
+            kernel_size=(1, 3, 3),
+            stride=1,
+            padding=(0, 1, 1)
+        )
+    
+        high = x - low
+    
+    
+        y = self.conv_low(low)
+    
+        feat = self.conv_high(high)
+    
+        y = y + feat
+        del feat
+    
+        feat = self.conv_spatial(x)
+    
+        y = y + feat
+        del feat
+    
+        feat = self.conv_point(x)
+    
+        y = y + feat
+        del feat
+    
+        feat = self.conv_depth(x)
+    
+        y = y + feat
+        del feat
+    
+        return y / self.num_paths
+
 
 # ============================================================
 # Optimized Decoder Block
@@ -162,28 +213,13 @@ class DecoderBlock(nn.Module):
         out_ch,
         upsample=True,
         use_routing=True,
-        spatial_reduction=True,
         channel_reduction=True,
     ):
         super().__init__()
 
         self.upsample_enabled = upsample
         self.use_routing = use_routing
-        self.spatial_reduction_enabled = spatial_reduction
         self.channel_reduction_enabled = channel_reduction
-
-        # ====================================================
-        # Spatial reduction
-        #
-        # Experts operate at reduced H/W.
-        # ====================================================
-
-        if self.spatial_reduction_enabled:
-
-            self.reduce_spatial = nn.AvgPool3d(
-                kernel_size=(1, 2, 2),
-                stride=(1, 2, 2)
-            )
 
         # ====================================================
         # Channel bottleneck
@@ -210,7 +246,7 @@ class DecoderBlock(nn.Module):
             self.reduced_ch = in_ch
 
         # ====================================================
-        # Five experts
+        # Five decoder experts
         # ====================================================
 
         self.conv_suite = DecoderConvSuite(
@@ -218,14 +254,10 @@ class DecoderBlock(nn.Module):
             reduced_ch
         )
 
-        self.num_kernels = (
-            self.conv_suite.num_paths
-        )
+        self.num_kernels = self.conv_suite.num_paths
 
         # ====================================================
         # Router
-        #
-        # Router operates at reduced resolution.
         # ====================================================
 
         if self.use_routing:
@@ -277,7 +309,7 @@ class DecoderBlock(nn.Module):
         self.act = nn.SiLU()
 
         # ====================================================
-        # Upsampler
+        # Upsampling
         # ====================================================
 
         if self.upsample_enabled:
@@ -291,115 +323,58 @@ class DecoderBlock(nn.Module):
         x,
         return_weights=False
     ):
-
         # ====================================================
-        # 1. Spatial reduction
+        # 1. Channel reduction
         # ====================================================
-
-        if self.spatial_reduction_enabled:
-
-            x = self.reduce_spatial(x)
-
-        # ====================================================
-        # 2. Channel reduction
-        # ====================================================
-
+    
         if self.channel_reduction_enabled:
-
             x = self.channel_down(x)
-
         # ====================================================
-        # 3. Expert computation
+        # 2–3. Expert computation + routing
         # ====================================================
-
-        feats = self.conv_suite(x)
-
-        # ====================================================
-        # 4. Routing
-        # ====================================================
-
+    
         if self.use_routing:
 
+            feats = self.conv_suite(x)
+        
             logits = self.router(x)
-
-            weights = F.softmax(
-                logits,
-                dim=1
-            )
-
-            # ------------------------------------------------
-            # Avoid zeros_like()
-            # ------------------------------------------------
-
-            y = (
-                weights[:, 0:1]
-                * feats[0]
-            )
-
-            for i in range(
-                1,
-                self.num_kernels
-            ):
-
-                y = (
-                    y
-                    + weights[:, i:i+1]
-                    * feats[i]
-                )
-
+            weights = F.softmax(logits, dim=1)
+        
+            y = weights[:, 0:1] * feats[0]
+        
+            for i in range(1, self.num_kernels):
+                y = y + weights[:, i:i+1] * feats[i]
         else:
-
-            # ------------------------------------------------
-            # Uniform mixing.
-            #
-            # No routing tensor is allocated.
-            # ------------------------------------------------
-
-            y = feats[0]
-
-            for i in range(
-                1,
-                self.num_kernels
-            ):
-
-                y = y + feats[i]
-
-            y = y / self.num_kernels
-
+        
+            y = self.conv_suite.forward_sequential(x)
             weights = None
-
         # ====================================================
-        # 5. Channel expansion
+        # 4. Channel expansion
         # ====================================================
-
+    
         if self.channel_reduction_enabled:
-
             y = self.channel_up(y)
-
         # ====================================================
-        # 6. Normalization
+        # 5. Normalization
         # ====================================================
-
+    
         y = self.norm(y)
-
+      
         y = self.act(y)
-
+   
         # ====================================================
-        # 7. Upsampling
+        # 6. Upsampling
         # ====================================================
-
+    
         if self.upsample_enabled:
-
             y = self.upsample(y)
-
         # ====================================================
         # Return
         # ====================================================
-
+    
         if return_weights:
-
             return y, weights
-
+    
         return y
 
 
