@@ -125,27 +125,21 @@ class AutoEncoder(nn.Module):
             256,
             128,
             upsample=True,
-            use_routing=True,
-            spatial_reduction=False,
-            channel_reduction=True
+            use_routing=True
         )
         
         self.dec1 = DecoderBlock(
             128,
             64,
             upsample=True,
-            use_routing=False,
-            spatial_reduction=False,
-            channel_reduction=True
+            use_routing=False
         )
         
         self.dec0 = DecoderBlock(
             64,
             32,
             upsample=False,
-            use_routing=False,
-            spatial_reduction=False,
-            channel_reduction=True
+            use_routing=False
         )
         self.out = OutputRefinementHead(32, out_ch=1)
 
