@@ -321,59 +321,79 @@ class DecoderBlock(nn.Module):
     def forward(
         self,
         x,
-        return_weights=False
+        return_weights=False,
+        return_expert_features=False,
+        return_contributions=False,
+        return_mixed_feature=False,
     ):
-        # ====================================================
-        # 1. Channel reduction
-        # ====================================================
-    
         if self.channel_reduction_enabled:
             x = self.channel_down(x)
-        # ====================================================
-        # 2–3. Expert computation + routing
-        # ====================================================
+    
+        expert_features = None
+        contributions = None
+        mixed_feature = None
     
         if self.use_routing:
-
             feats = self.conv_suite(x)
-        
+    
             logits = self.router(x)
             weights = F.softmax(logits, dim=1)
-        
-            y = weights[:, 0:1] * feats[0]
-        
-            for i in range(1, self.num_kernels):
-                y = y + weights[:, i:i+1] * feats[i]
+    
+            # [B, K, C_out, D, H, W]
+            if (
+                return_expert_features
+                or return_contributions
+                or return_mixed_feature
+            ):
+                expert_features = torch.stack(feats, dim=1)
+    
+                # [B, K, 1, D, H, W]
+                expanded_weights = weights.unsqueeze(2)
+    
+                # [B, K, C_out, D, H, W]
+                contributions = expanded_weights * expert_features
+    
+                # [B, C_out, D, H, W]
+                mixed_feature = contributions.sum(dim=1)
+    
+                y = mixed_feature
+    
+            else:
+                # Memory-efficient path for normal inference/training
+                y = weights[:, 0:1] * feats[0]
+    
+                for i in range(1, self.num_kernels):
+                    y = y + weights[:, i:i+1] * feats[i]
+    
         else:
-        
-            y = self.conv_suite.forward_sequential(x)
             weights = None
-        # ====================================================
-        # 4. Channel expansion
-        # ====================================================
+            y = self.conv_suite.forward_sequential(x)
+    
+            if return_mixed_feature:
+                mixed_feature = y
     
         if self.channel_reduction_enabled:
             y = self.channel_up(y)
-        # ====================================================
-        # 5. Normalization
-        # ====================================================
     
         y = self.norm(y)
-      
         y = self.act(y)
-   
-        # ====================================================
-        # 6. Upsampling
-        # ====================================================
     
         if self.upsample_enabled:
             y = self.upsample(y)
-        # ====================================================
-        # Return
-        # ====================================================
     
         if return_weights:
-            return y, weights
+            outputs = [y, weights]
+    
+            if return_expert_features:
+                outputs.append(expert_features)
+    
+            if return_contributions:
+                outputs.append(contributions)
+    
+            if return_mixed_feature:
+                outputs.append(mixed_feature)
+    
+            return tuple(outputs)
     
         return y
 
