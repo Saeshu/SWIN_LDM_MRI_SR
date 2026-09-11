@@ -624,11 +624,12 @@ class AnisotropicSwinBlock(nn.Module):
             #
             # Kept because this changes training behavior.
             # ------------------------------------------------
-
-            logits = (
-                logits
-                + 0.01 * torch.randn_like(logits)
-            )
+            if self.training:
+    
+                logits = (
+                    logits
+                    + 0.01 * torch.randn_like(logits)
+                )
 
             weights = F.softmax(
                 logits / 0.8,
