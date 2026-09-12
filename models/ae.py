@@ -210,27 +210,37 @@ class AutoEncoder(nn.Module):
         return x, w_E2
     
     def decode(
-    self,
-    z,
-    return_weights=False,
-):
-
-        if return_weights:
+        self,
+        z,
+        return_weights=False,
+        return_expert_features=False,
+    ):
     
-            z, weights = self.dec2(
-                z,
-                return_weights=True,
-            )
-
+        # ------------------------------------------------
+        # dec2
+        # ------------------------------------------------
     
-        else:
-    
-            z = checkpoint(
-            self.dec2,
+        dec2_output = self.dec2(
             z,
-            use_reentrant=False,
+            return_weights=return_weights or return_expert_features,
+            return_expert_features=return_expert_features,
         )
     
+        if return_weights and return_expert_features:
+            z, weights, expert_features = dec2_output
+    
+        elif return_weights:
+            z, weights = dec2_output
+    
+        elif return_expert_features:
+            z, expert_features = dec2_output
+    
+        else:
+            z = checkpoint(
+                self.dec2,
+                z,
+                use_reentrant=False,
+            )
             weights = None
     
         # ------------------------------------------------
@@ -251,9 +261,18 @@ class AutoEncoder(nn.Module):
     
         out = self.out(z)
     
-        if return_weights:
+        # ------------------------------------------------
+        # Return
+        # ------------------------------------------------
     
+        if return_weights and return_expert_features:
+            return out, weights, expert_features
+    
+        elif return_weights:
             return out, weights
+    
+        elif return_expert_features:
+            return out, expert_features
     
         return out
         
