@@ -211,14 +211,22 @@ class DecoderBlock(nn.Module):
         self,
         in_ch,
         out_ch,
+        routing_mode="adaptive",
         upsample=True,
         use_routing=True,
         channel_reduction=True,
     ):
         super().__init__()
 
+        if use_routing and routing_mode not in {"adaptive", "uniform"}:
+            raise ValueError(
+                f"Invalid routing_mode: {routing_mode}. "
+                f"Expected 'adaptive' or 'uniform'."
+            )
+
         self.upsample_enabled = upsample
         self.use_routing = use_routing
+        self.routing_mode = routing_mode
         self.channel_reduction_enabled = channel_reduction
 
         # ====================================================
@@ -246,7 +254,7 @@ class DecoderBlock(nn.Module):
             self.reduced_ch = in_ch
 
         # ====================================================
-        # Five decoder experts
+        # Convolutional experts
         # ====================================================
 
         self.conv_suite = DecoderConvSuite(
@@ -260,7 +268,7 @@ class DecoderBlock(nn.Module):
         # Router
         # ====================================================
 
-        if self.use_routing:
+        if self.use_routing and self.routing_mode == "adaptive":
 
             router_hidden = max(
                 16,
@@ -326,75 +334,145 @@ class DecoderBlock(nn.Module):
         return_contributions=False,
         return_mixed_feature=False,
     ):
+
         if self.channel_reduction_enabled:
             x = self.channel_down(x)
-    
+
         expert_features = None
         contributions = None
         mixed_feature = None
-    
+        weights = None
+
+        # ====================================================
+        # Routed expert mixture
+        # ====================================================
+
         if self.use_routing:
+
             feats = self.conv_suite(x)
-    
-            logits = self.router(x)
-            weights = F.softmax(logits, dim=1)
-    
-            # [B, K, C_out, D, H, W]
+
+            if self.routing_mode == "adaptive":
+
+                logits = self.router(x)
+
+                weights = F.softmax(
+                    logits,
+                    dim=1
+                )
+
+            elif self.routing_mode == "uniform":
+
+                B, _, D, H, W = x.shape
+                K = self.num_kernels
+
+                weights = torch.full(
+                    (B, K, D, H, W),
+                    1.0 / K,
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+
+            # -----------------------------------------------
+            # Full feature/contribution path
+            # -----------------------------------------------
+
             if (
                 return_expert_features
                 or return_contributions
                 or return_mixed_feature
             ):
-                expert_features = torch.stack(feats, dim=1)
-    
+
+                # [B, K, C, D, H, W]
+                expert_features = torch.stack(
+                    feats,
+                    dim=1
+                )
+
                 # [B, K, 1, D, H, W]
                 expanded_weights = weights.unsqueeze(2)
-    
-                # [B, K, C_out, D, H, W]
-                contributions = expanded_weights * expert_features
-    
-                # [B, C_out, D, H, W]
-                mixed_feature = contributions.sum(dim=1)
-    
+
+                # [B, K, C, D, H, W]
+                contributions = (
+                    expanded_weights *
+                    expert_features
+                )
+
+                # [B, C, D, H, W]
+                mixed_feature = contributions.sum(
+                    dim=1
+                )
+
                 y = mixed_feature
-    
+
+            # -----------------------------------------------
+            # Memory-efficient path
+            # -----------------------------------------------
+
             else:
-                # Memory-efficient path for normal inference/training
-                y = weights[:, 0:1] * feats[0]
-    
+
+                y = (
+                    weights[:, 0:1] *
+                    feats[0]
+                )
+
                 for i in range(1, self.num_kernels):
-                    y = y + weights[:, i:i+1] * feats[i]
-    
+
+                    y = y + (
+                        weights[:, i:i+1] *
+                        feats[i]
+                    )
+
+        # ====================================================
+        # Non-routed path
+        # ====================================================
+
         else:
-            weights = None
+
             y = self.conv_suite.forward_sequential(x)
-    
+
             if return_mixed_feature:
                 mixed_feature = y
-    
+
+        # ====================================================
+        # Channel expansion
+        # ====================================================
+
         if self.channel_reduction_enabled:
             y = self.channel_up(y)
-    
+
+        # ====================================================
+        # Normalization + activation
+        # ====================================================
+
         y = self.norm(y)
         y = self.act(y)
-    
+
+        # ====================================================
+        # Upsampling
+        # ====================================================
+
         if self.upsample_enabled:
             y = self.upsample(y)
-    
+
+        # ====================================================
+        # Return
+        # ====================================================
+
         if return_weights:
+
             outputs = [y, weights]
-    
+
             if return_expert_features:
                 outputs.append(expert_features)
-    
+
             if return_contributions:
                 outputs.append(contributions)
-    
+
             if return_mixed_feature:
                 outputs.append(mixed_feature)
-    
+
             return tuple(outputs)
-    
+
         return y
 
 
