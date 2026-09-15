@@ -124,6 +124,7 @@ class AutoEncoder(nn.Module):
         self.dec2 = DecoderBlock(
             256,
             128,
+            routing_mode="uniform",
             upsample=True,
             use_routing=True
         )
