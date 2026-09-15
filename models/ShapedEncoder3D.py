@@ -73,19 +73,27 @@ class AnisotropicConvSuite(nn.Module):
             for expert in self.kernels
         ]
 
-    def forward_sequential(self, x, weights):
+    def forward_sequential(self, x, weights=None, uniform=False):
 
-        y = self.kernels[0](x) * weights[0]
+        if uniform:
+            y = self.kernels[0](x)
     
-        for i in range(1, self.num_paths):
+            for i in range(1, self.num_paths):
+                feat = self.kernels[i](x)
+                y = y + feat
+                del feat
     
-            feat = self.kernels[i](x)
+            return y / self.num_paths
     
-            y = y + weights[i] * feat
+        else:
+            y = self.kernels[0](x) * weights[0]
     
-            del feat
+            for i in range(1, self.num_paths):
+                feat = self.kernels[i](x)
+                y = y + weights[i] * feat
+                del feat
     
-        return y
+            return y
 
 # ============================================================
 # Window pooling / tokenization
@@ -356,7 +364,8 @@ class AnisotropicSwinBlock(nn.Module):
     
             y = self.conv_suite.forward_sequential(
                 x,
-                weights
+                weights,
+                uniform = True
             )
     
             # ----------------------------------------------------
