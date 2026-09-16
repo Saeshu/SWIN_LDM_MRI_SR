@@ -592,22 +592,22 @@ class AnisotropicSwinBlock(nn.Module):
             # Feature strength
             # ------------------------------------------------
 
-            feat_strength = x_small.abs().mean(
-                dim=1,
-                keepdim=True
-            )
+            # feat_strength = x_small.abs().mean(
+            #     dim=1,
+            #     keepdim=True
+            # )
 
-            feat_strength = F.interpolate(
-                feat_strength,
-                size=logits.shape[2:],
-                mode="trilinear",
-                align_corners=False
-            )
+            # feat_strength = F.interpolate(
+            #     feat_strength,
+            #     size=logits.shape[2:],
+            #     mode="trilinear",
+            #     align_corners=False
+            # )
 
-            logits = (
-                logits
-                + 0.3 * feat_strength
-            )
+            # logits = (
+            #     logits
+            #     + 0.3 * feat_strength
+            # )
 
             # ------------------------------------------------
             # Normalize routing logits
