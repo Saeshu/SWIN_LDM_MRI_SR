@@ -276,6 +276,7 @@ class DecoderBlock(nn.Module):
         upsample=True,
         use_routing=True,
         channel_reduction=True,
+        experts=None,
     ):
         super().__init__()
 
@@ -320,11 +321,11 @@ class DecoderBlock(nn.Module):
 
         self.conv_suite = DecoderConvSuite(
             reduced_ch,
-            reduced_ch
+            reduced_ch,
+            experts=experts,
         )
-
+        
         self.num_kernels = self.conv_suite.num_paths
-
         # ====================================================
         # Router
         # ====================================================
