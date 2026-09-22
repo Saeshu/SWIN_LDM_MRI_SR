@@ -388,429 +388,277 @@ class AnisotropicSwinBlock(nn.Module):
         window_size=None,
         use_attention=True,
         shift=False,
-        experts=None,
-        num_heads=4,
+        experts=None
     ):
-
         super().__init__()
 
         self.use_attention = use_attention
         self.window_size = window_size
-        self.shift = shift
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # Expert suite
-        # ----------------------------------------------------
-
+        # --------------------------------------------------------
         self.conv_suite = AnisotropicConvSuite(
-            in_ch=in_ch,
-            out_ch=out_ch,
-            experts=experts,
+            in_ch,
+            out_ch,
+            experts=experts
         )
-
-        # ----------------------------------------------------
-        # IMPORTANT:
-        # Number of routing channels is derived from the
-        # selected expert configuration.
-        # ----------------------------------------------------
 
         self.num_kernels = self.conv_suite.num_paths
+        self.expert_names = self.conv_suite.expert_names
 
-        # ----------------------------------------------------
-        # Reduced representation for routing
-        # ----------------------------------------------------
-
-        reduced_ch = max(
-            1,
-            in_ch // 2
-        )
+        # --------------------------------------------------------
+        # Channel reduction
+        # --------------------------------------------------------
+        reduced_ch = max(1, in_ch // 2)
 
         self.reduce = nn.Conv3d(
             in_ch,
             reduced_ch,
-            kernel_size=1,
+            kernel_size=1
         )
 
-        # ----------------------------------------------------
-        # Routing
-        # ----------------------------------------------------
-
-        if self.use_attention:
+        # --------------------------------------------------------
+        # Attention is ONLY created when requested
+        # --------------------------------------------------------
+        if use_attention:
 
             self.window_pool = WindowPool3D(
-                window_size=window_size,
-                shift=shift,
+                window_size,
+                shift=False
             )
 
             self.attn = KernelMixingAttention(
                 embed_dim=reduced_ch,
-                num_kernels=self.num_kernels,
-                num_heads=num_heads,
+                num_kernels=self.num_kernels
             )
 
-        else:
-
-            self.alpha = nn.Parameter(
-                torch.ones(self.num_kernels)
-            )
-
-        # ----------------------------------------------------
-        # Output
-        # ----------------------------------------------------
+        # IMPORTANT:
+        # There is intentionally NO alpha parameter for
+        # use_attention=False.
+        #
+        # The non-attention branch uses a fixed uniform
+        # 1/K mixture instead.
 
         self.norm = nn.GroupNorm(
             8,
-            out_ch,
+            out_ch
         )
 
         self.act = nn.SiLU()
-
     # ========================================================
     # Forward
     # ========================================================
 
-    def forward(
-        self,
-        x,
-        return_weights=False,
-    ):
-
+    def forward(self, x, return_weights=False):
         B, C, D, H, W = x.shape
-
-        # ====================================================
-        # No attention
-        # ====================================================
-
+    
+        # ============================================================
+        # NON-ATTENTION BRANCH
+        # ============================================================
+        # No attention.
+        # No routing.
+        # No learned expert weights.
+        # Every selected expert contributes equally: 1 / K.
+        # ============================================================
         if not self.use_attention:
-
-            # ------------------------------------------------
-            # Global learned routing
-            # ------------------------------------------------
-
-            weights = F.softmax(
-                self.alpha,
-                dim=0,
-            )
-
-            # ------------------------------------------------
-            # Sequential expert execution
-            #
-            # NOTE:
-            # Preserve your previous behavior:
-            # uniform=True means equal weighting.
-            # ------------------------------------------------
-
+    
             y = self.conv_suite.forward_sequential(
                 x,
-                weights=weights,
-                uniform=True,
+                uniform=True
             )
-
-            # ------------------------------------------------
-            # Normalize + activation
-            # ------------------------------------------------
-
+    
             y = self.norm(y)
             y = self.act(y)
-
-            # ------------------------------------------------
-            # Return
-            # ------------------------------------------------
-
+    
             if return_weights:
-
-                weights_spatial = weights.view(
-                    1,
-                    self.num_kernels,
-                    1,
-                    1,
-                    1,
-                ).expand(
-                    B,
-                    -1,
-                    D,
-                    H,
-                    W,
+                K = self.num_kernels
+    
+                weights = torch.full(
+                    (B, K, D, H, W),
+                    1.0 / K,
+                    device=x.device,
+                    dtype=x.dtype
                 )
-
-                return y, weights_spatial
-
+    
+                return y, weights
+    
             return y
-
-        # ====================================================
-        # High-frequency extraction
-        # ====================================================
-
-        hf = (
-            x
-            - F.avg_pool3d(
-                x,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
+    
+    
+        # ============================================================
+        # ATTENTION / ADAPTIVE ROUTING BRANCH
+        # ============================================================
+        # Attention generates spatially varying logits.
+        # Softmax converts them into routing weights.
+        # Each spatial location can therefore use a different
+        # mixture of experts.
+        # ============================================================
+    
+        # ------------------------------------------------------------
+        # 1. Construct high-frequency-enhanced input for routing
+        # ------------------------------------------------------------
+        hf = x - F.avg_pool3d(
+            x,
+            kernel_size=3,
+            stride=1,
+            padding=1
         )
-
-        hf = torch.clamp(
-            hf,
-            -3.0,
-            3.0,
-        )
-
-        # ====================================================
-        # Normalize
-        # ====================================================
-
+    
+        hf = torch.clamp(hf, -3.0, 3.0)
+    
         x = (
-            x
-            - x.mean(
-                dim=(2, 3, 4),
-                keepdim=True,
-            )
+            x - x.mean(dim=(2, 3, 4), keepdim=True)
         ) / (
-            x.std(
-                dim=(2, 3, 4),
-                keepdim=True,
-            ) + 1e-5
+            x.std(dim=(2, 3, 4), keepdim=True) + 1e-5
         )
-
-        # ====================================================
-        # Inject high frequency
-        # ====================================================
-
+    
         x = x + 0.5 * hf
-
-        # ====================================================
-        # Reduced spatial representation
-        # ====================================================
-
+    
+        # ------------------------------------------------------------
+        # 2. Downsample spatial dimensions for attention
+        # ------------------------------------------------------------
         x_small = F.interpolate(
             x,
             scale_factor=(1, 0.5, 0.5),
             mode="trilinear",
-            align_corners=False,
+            align_corners=False
         )
-
+    
         x_small = (
             x_small
-            - x_small.mean(
-                dim=(2, 3, 4),
-                keepdim=True,
-            )
+            - x_small.mean(dim=(2, 3, 4), keepdim=True)
         )
-
-        # ====================================================
-        # Channel reduction
-        # ====================================================
-
+    
+        # ------------------------------------------------------------
+        # 3. Reduce channels before attention
+        # ------------------------------------------------------------
         x_low = self.reduce(x_small)
-
-        # ====================================================
-        # High-frequency component in reduced space
-        # ====================================================
-
-        x_high = (
-            x_low
-            - F.avg_pool3d(
-                x_low,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
+    
+        x_high = x_low - F.avg_pool3d(
+            x_low,
+            kernel_size=3,
+            stride=1,
+            padding=1
         )
-
+    
         x_low = x_low / (
-            x_low.std(
-                dim=(2, 3, 4),
-                keepdim=True,
-            ) + 1e-5
+            x_low.std(dim=(2, 3, 4), keepdim=True) + 1e-5
         )
-
+    
         x_high = x_high / (
-            x_high.std(
-                dim=(2, 3, 4),
-                keepdim=True,
-            ) + 1e-5
+            x_high.std(dim=(2, 3, 4), keepdim=True) + 1e-5
         )
-
+    
         x_small = x_low + 0.5 * x_high
-
+    
         _, _, D_s, H_s, W_s = x_small.shape
-
-        # ====================================================
-        # EXPERTS
-        #
-        # Number and ordering are determined entirely by
-        # self.conv_suite.expert_names.
-        # ====================================================
-
+    
+        # ------------------------------------------------------------
+        # 4. Compute ALL expert features
+        # ------------------------------------------------------------
+        # These are the actual transformations that will be mixed.
         feats = self.conv_suite(x)
-
-        # ====================================================
-        # ROUTING
-        # ====================================================
-
+    
+        # ------------------------------------------------------------
+        # 5. Convert local windows into attention tokens
+        # ------------------------------------------------------------
         (
             tokens,
             (Nd, Nh, Nw),
-            (D_pad, H_pad, W_pad),
+            (D_pad, H_pad, W_pad)
         ) = self.window_pool(x_small)
-
-        # ----------------------------------------------------
-        # Attention
-        # ----------------------------------------------------
-
+    
+        # ------------------------------------------------------------
+        # 6. Attention predicts expert logits
+        # ------------------------------------------------------------
         logits = self.attn(tokens)
-
-        # ----------------------------------------------------
-        # Restore window → spatial layout
+    
+        # Shape:
+        # [B, Nd * Nh * Nw, K]
         #
-        # [B, N_windows, K]
-        # →
-        # [B, Nd, Nh, Nw, K]
-        # ----------------------------------------------------
-
+        # where K = number of selected experts
+    
         logits = logits.reshape(
             B,
             Nd,
             Nh,
             Nw,
-            self.num_kernels,
+            self.num_kernels
         )
-
+    
         logits = logits.permute(
-            0,
-            4,
-            1,
-            2,
-            3,
+            0, 4, 1, 2, 3
         )
-
-        # ----------------------------------------------------
-        # Restore padded spatial resolution
-        # ----------------------------------------------------
-
+    
+        # ------------------------------------------------------------
+        # 7. Restore logits to spatial resolution
+        # ------------------------------------------------------------
         logits = F.interpolate(
             logits,
-            size=(
-                D_pad,
-                H_pad,
-                W_pad,
-            ),
+            size=(D_pad, H_pad, W_pad),
             mode="trilinear",
-            align_corners=False,
+            align_corners=False
         )
-
-        # ----------------------------------------------------
-        # Crop
-        # ----------------------------------------------------
-
+    
         logits = logits[
-            :,
-            :,
-            :D_s,
-            :H_s,
-            :W_s,
+            :, :, :D_s, :H_s, :W_s
         ]
-
-        # ----------------------------------------------------
-        # Upscale routing to feature resolution
-        # ----------------------------------------------------
-
+    
         logits = F.interpolate(
             logits,
-            size=(
-                D,
-                H,
-                W,
-            ),
+            size=(D, H, W),
             mode="trilinear",
-            align_corners=False,
+            align_corners=False
         )
-
-        # ----------------------------------------------------
-        # Normalize routing logits
-        # ----------------------------------------------------
-
+    
+        # ------------------------------------------------------------
+        # 8. Normalize routing logits
+        # ------------------------------------------------------------
         logits = (
             logits
-            - logits.mean(
-                dim=(2, 3, 4),
-                keepdim=True,
-            )
+            - logits.mean(dim=(2, 3, 4), keepdim=True)
         )
-
+    
         logits = logits / (
-            logits.std(
-                dim=1,
-                keepdim=True,
-            ) + 1e-5
+            logits.std(dim=1, keepdim=True) + 1e-5
         )
-
-        # ----------------------------------------------------
-        # Stochastic symmetry breaking
-        # ----------------------------------------------------
-
+    
+        # Small training-time perturbation
         if self.training:
-
-            logits = (
-                logits
-                + 0.01 * torch.randn_like(logits)
-            )
-
-        # ----------------------------------------------------
-        # Convert logits → routing weights
-        # ----------------------------------------------------
-
+            logits = logits + 0.01 * torch.randn_like(logits)
+    
+        # ------------------------------------------------------------
+        # 9. Convert logits -> spatial routing weights
+        # ------------------------------------------------------------
         weights = F.softmax(
             logits / 0.8,
-            dim=1,
+            dim=1
         )
-
-        # ====================================================
-        # Expert mixing
-        # ====================================================
-
-        # ----------------------------------------------------
-        # Start with first expert
-        # ----------------------------------------------------
-
+    
+        # ------------------------------------------------------------
+        # 10. Mixture of experts
+        # ------------------------------------------------------------
         y = (
             weights[:, 0:1]
             * feats[0]
         )
-
-        # ----------------------------------------------------
-        # Add remaining experts
-        # ----------------------------------------------------
-
-        for i in range(
-            1,
-            self.num_kernels,
-        ):
-
-            y = (
-                y
-                + weights[:, i:i + 1]
+    
+        for i in range(1, self.num_kernels):
+            y = y + (
+                weights[:, i:i+1]
                 * feats[i]
             )
-
-        # ====================================================
-        # Output
-        # ====================================================
-
-        y = self.act(
-            self.norm(y)
-        )
-
-        # ====================================================
-        # Return
-        # ====================================================
-
+    
+        # ------------------------------------------------------------
+        # 11. Normalization + activation
+        # ------------------------------------------------------------
+        y = self.norm(y)
+        y = self.act(y)
+    
         if return_weights:
-
             return y, weights
-
+    
         return y
 
 
