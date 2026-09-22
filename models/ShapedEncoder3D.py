@@ -9,13 +9,53 @@ import torch.nn.functional as F
 
 class AnisotropicConvSuite(nn.Module):
 
-    def __init__(self, in_ch, out_ch):
+    VALID_EXPERTS = {
+        "low",
+        "point",
+        "spatial",
+        "depth",
+        "identity",
+    }
+
+    def __init__(
+        self,
+        in_ch,
+        out_ch,
+        experts=None
+    ):
         super().__init__()
 
-        self.kernels = nn.ModuleList([
+        if experts is None:
+            experts = [
+                "low",
+                "point",
+                "spatial",
+                "depth",
+                "identity"
+            ]
 
-            # 1. Low-pass / structure
-            nn.Sequential(
+        if len(experts) == 0:
+            raise ValueError(
+                "At least one expert must be selected."
+            )
+
+        invalid = set(experts) - self.VALID_EXPERTS
+
+        if invalid:
+            raise ValueError(
+                f"Invalid experts: {sorted(invalid)}. "
+                f"Valid experts: {sorted(self.VALID_EXPERTS)}"
+            )
+
+        if len(experts) != len(set(experts)):
+            raise ValueError(
+                f"Duplicate experts are not allowed: {experts}"
+            )
+
+        self.expert_names = list(experts)
+
+        kernels = {
+            "low": lambda: nn.Sequential(
                 nn.AvgPool3d(
                     kernel_size=(1, 3, 3),
                     stride=1,
@@ -28,71 +68,80 @@ class AnisotropicConvSuite(nn.Module):
                 )
             ),
 
-            # 2. Pointwise
-            nn.Conv3d(
+            "point": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=1
             ),
 
-            # 3. Spatial
-            nn.Conv3d(
+            "spatial": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=(1, 3, 3),
                 padding=(0, 1, 1)
             ),
 
-            # 4. Depth
-            nn.Conv3d(
+            "depth": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=(3, 1, 1),
                 padding=(1, 0, 0)
             ),
 
-            # 5. Identity-like
-            nn.Conv3d(
+            "identity": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=1
             )
+        }
+
+        self.kernels = nn.ModuleList([
+            kernels[name]()
+            for name in self.expert_names
         ])
 
         self.num_paths = len(self.kernels)
 
     def forward(self, x):
-        """
-        Original behavior.
-        Returns all expert outputs.
-        Used by attention blocks.
-        """
 
         return [
             expert(x)
             for expert in self.kernels
         ]
 
-    def forward_sequential(self, x, weights=None, uniform=False):
+    def forward_sequential(
+        self,
+        x,
+        weights=None,
+        uniform=False
+    ):
 
         if uniform:
+
             y = self.kernels[0](x)
-    
+
             for i in range(1, self.num_paths):
+
                 feat = self.kernels[i](x)
+
                 y = y + feat
+
                 del feat
-    
+
             return y / self.num_paths
-    
+
         else:
+
             y = self.kernels[0](x) * weights[0]
-    
+
             for i in range(1, self.num_paths):
+
                 feat = self.kernels[i](x)
+
                 y = y + weights[i] * feat
+
                 del feat
-    
+
             return y
 
 # ============================================================
@@ -273,23 +322,28 @@ class AnisotropicSwinBlock(nn.Module):
         out_ch,
         window_size=None,
         use_attention=True,
-        shift=False
+        shift=False,
+        experts=None
     ):
 
         super().__init__()
 
         self.use_attention = use_attention
-        self.num_kernels = 5
         self.window_size = window_size
 
         # ----------------------------------------------------
         # Expert suite
         # ----------------------------------------------------
-
         self.conv_suite = AnisotropicConvSuite(
             in_ch,
-            out_ch
+            out_ch,
+            experts=experts
         )
+
+        self.num_kernels = self.conv_suite.num_paths
+
+     
+
 
         # ----------------------------------------------------
         # Reduced representation for routing
