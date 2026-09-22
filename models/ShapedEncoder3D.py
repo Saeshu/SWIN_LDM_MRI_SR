@@ -14,7 +14,7 @@ class AnisotropicConvSuite(nn.Module):
         "point",
         "spatial",
         "depth",
-        "identity",
+        "identity_like",
     }
 
     def __init__(
@@ -31,7 +31,7 @@ class AnisotropicConvSuite(nn.Module):
                 "point",
                 "spatial",
                 "depth",
-                "identity"
+                "identity_like"
             ]
 
         if len(experts) == 0:
@@ -88,7 +88,7 @@ class AnisotropicConvSuite(nn.Module):
                 padding=(1, 0, 0)
             ),
 
-            "identity": lambda: nn.Conv3d(
+            "identity_like": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=1
