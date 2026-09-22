@@ -68,136 +68,197 @@ class SpatialUpsample3D(nn.Module):
 
 class DecoderConvSuite(nn.Module):
 
+    VALID_EXPERTS = {
+        "low",
+        "high",
+        "spatial",
+        "point",
+        "depth",
+    }
+
     def __init__(
         self,
         in_ch,
-        out_ch
+        out_ch,
+        experts=None,
     ):
         super().__init__()
+
+        if experts is None:
+            experts = [
+                "low",
+                "high",
+                "spatial",
+                "point",
+                "depth",
+            ]
+
+        if len(experts) == 0:
+            raise ValueError("At least one expert must be selected.")
+
+        invalid = set(experts) - self.VALID_EXPERTS
+
+        if invalid:
+            raise ValueError(
+                f"Unknown experts: {sorted(invalid)}. "
+                f"Valid experts: {sorted(self.VALID_EXPERTS)}"
+            )
+
+        if len(experts) != len(set(experts)):
+            raise ValueError(
+                f"Duplicate experts are not allowed: {experts}"
+            )
+
+        self.experts = list(experts)
+        self.num_paths = len(self.experts)
 
         # ----------------------------------------------------
         # Low-frequency expert
         # ----------------------------------------------------
 
-        self.conv_low = nn.Conv3d(
-            in_ch,
-            out_ch,
-            kernel_size=1
-        )
+        if "low" in self.experts:
+            self.conv_low = nn.Conv3d(
+                in_ch,
+                out_ch,
+                kernel_size=1
+            )
 
         # ----------------------------------------------------
         # High-frequency expert
         # ----------------------------------------------------
 
-        self.conv_high = nn.Conv3d(
-            in_ch,
-            out_ch,
-            kernel_size=1
-        )
+        if "high" in self.experts:
+            self.conv_high = nn.Conv3d(
+                in_ch,
+                out_ch,
+                kernel_size=1
+            )
 
         # ----------------------------------------------------
         # In-plane spatial expert
         # ----------------------------------------------------
 
-        self.conv_spatial = nn.Conv3d(
-            in_ch,
-            out_ch,
-            kernel_size=(1, 3, 3),
-            padding=(0, 1, 1)
-        )
+        if "spatial" in self.experts:
+            self.conv_spatial = nn.Conv3d(
+                in_ch,
+                out_ch,
+                kernel_size=(1, 3, 3),
+                padding=(0, 1, 1)
+            )
 
         # ----------------------------------------------------
         # Pointwise expert
         # ----------------------------------------------------
 
-        self.conv_point = nn.Conv3d(
-            in_ch,
-            out_ch,
-            kernel_size=1
-        )
+        if "point" in self.experts:
+            self.conv_point = nn.Conv3d(
+                in_ch,
+                out_ch,
+                kernel_size=1
+            )
 
         # ----------------------------------------------------
         # Depth expert
         # ----------------------------------------------------
 
-        self.conv_depth = nn.Conv3d(
-            in_ch,
-            out_ch,
-            kernel_size=(3, 1, 1),
-            padding=(1, 0, 0)
-        )
-
-        self.num_paths = 5
+        if "depth" in self.experts:
+            self.conv_depth = nn.Conv3d(
+                in_ch,
+                out_ch,
+                kernel_size=(3, 1, 1),
+                padding=(1, 0, 0)
+            )
 
     def forward(self, x):
 
-        # ====================================================
-        # Frequency decomposition
-        # ====================================================
+        low = None
+        high = None
 
-        low = F.avg_pool3d(
-            x,
-            kernel_size=(1, 3, 3),
-            stride=1,
-            padding=(0, 1, 1)
-        )
+        # Only compute decomposition if required
+        if "low" in self.experts or "high" in self.experts:
 
-        high = x - low
+            low = F.avg_pool3d(
+                x,
+                kernel_size=(1, 3, 3),
+                stride=1,
+                padding=(0, 1, 1)
+            )
 
-        # ====================================================
-        # Expert paths
-        # ====================================================
+            high = x - low
 
-        return (
-            self.conv_low(low),
-            self.conv_high(high),
-            self.conv_spatial(x),
-            self.conv_point(x),
-            self.conv_depth(x),
-        )
+        outputs = []
+
+        for expert in self.experts:
+
+            if expert == "low":
+                outputs.append(
+                    self.conv_low(low)
+                )
+
+            elif expert == "high":
+                outputs.append(
+                    self.conv_high(high)
+                )
+
+            elif expert == "spatial":
+                outputs.append(
+                    self.conv_spatial(x)
+                )
+
+            elif expert == "point":
+                outputs.append(
+                    self.conv_point(x)
+                )
+
+            elif expert == "depth":
+                outputs.append(
+                    self.conv_depth(x)
+                )
+
+        return tuple(outputs)
 
     def forward_sequential(self, x):
 
-        def mem(tag):
-            torch.cuda.synchronize()
-            print(
-                f"{tag:<25}"
-                f"alloc={torch.cuda.memory_allocated()/1024**3:.3f} GB  "
-                f"peak={torch.cuda.max_memory_allocated()/1024**3:.3f} GB"
+        low = None
+        high = None
+
+        if "low" in self.experts or "high" in self.experts:
+
+            low = F.avg_pool3d(
+                x,
+                kernel_size=(1, 3, 3),
+                stride=1,
+                padding=(0, 1, 1)
             )
-    
-        low = F.avg_pool3d(
-            x,
-            kernel_size=(1, 3, 3),
-            stride=1,
-            padding=(0, 1, 1)
-        )
-    
-        high = x - low
-    
-    
-        y = self.conv_low(low)
-    
-        feat = self.conv_high(high)
-    
-        y = y + feat
-        del feat
-    
-        feat = self.conv_spatial(x)
-    
-        y = y + feat
-        del feat
-    
-        feat = self.conv_point(x)
-    
-        y = y + feat
-        del feat
-    
-        feat = self.conv_depth(x)
-    
-        y = y + feat
-        del feat
-    
+
+            high = x - low
+
+        y = None
+
+        for expert in self.experts:
+
+            if expert == "low":
+                feat = self.conv_low(low)
+
+            elif expert == "high":
+                feat = self.conv_high(high)
+
+            elif expert == "spatial":
+                feat = self.conv_spatial(x)
+
+            elif expert == "point":
+                feat = self.conv_point(x)
+
+            elif expert == "depth":
+                feat = self.conv_depth(x)
+
+            if y is None:
+                y = feat
+            else:
+                y = y + feat
+
+            del feat
+
         return y / self.num_paths
 
 
