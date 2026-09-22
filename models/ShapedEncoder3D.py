@@ -4,6 +4,19 @@ import torch.nn.functional as F
 
 
 # ============================================================
+# Expert configurations
+# ============================================================
+
+DEFAULT_EXPERTS = [
+    "low",
+    "point",
+    "spatial",
+    "depth",
+    "identity_like",
+]
+
+
+# ============================================================
 # Anisotropic convolution expert suite
 # ============================================================
 
@@ -21,18 +34,20 @@ class AnisotropicConvSuite(nn.Module):
         self,
         in_ch,
         out_ch,
-        experts=None
+        experts=None,
     ):
         super().__init__()
 
+        # ----------------------------------------------------
+        # Default configuration
+        # ----------------------------------------------------
+
         if experts is None:
-            experts = [
-                "low",
-                "point",
-                "spatial",
-                "depth",
-                "identity_like"
-            ]
+            experts = DEFAULT_EXPERTS.copy()
+
+        # ----------------------------------------------------
+        # Validate configuration
+        # ----------------------------------------------------
 
         if len(experts) == 0:
             raise ValueError(
@@ -52,9 +67,19 @@ class AnisotropicConvSuite(nn.Module):
                 f"Duplicate experts are not allowed: {experts}"
             )
 
+        # ----------------------------------------------------
+        # Store configuration
+        # ----------------------------------------------------
+
         self.expert_names = list(experts)
 
+        # ----------------------------------------------------
+        # Expert constructors
+        # ----------------------------------------------------
+
         kernels = {
+
+            # 1. Low-pass / structure
             "low": lambda: nn.Sequential(
                 nn.AvgPool3d(
                     kernel_size=(1, 3, 3),
@@ -68,12 +93,14 @@ class AnisotropicConvSuite(nn.Module):
                 )
             ),
 
+            # 2. Pointwise
             "point": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=1
             ),
 
+            # 3. In-plane spatial
             "spatial": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
@@ -81,6 +108,7 @@ class AnisotropicConvSuite(nn.Module):
                 padding=(0, 1, 1)
             ),
 
+            # 4. Through-plane / depth
             "depth": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
@@ -88,19 +116,32 @@ class AnisotropicConvSuite(nn.Module):
                 padding=(1, 0, 0)
             ),
 
+            # 5. Identity-like pointwise transformation
             "identity_like": lambda: nn.Conv3d(
                 in_ch,
                 out_ch,
                 kernel_size=1
-            )
+            ),
         }
+
+        # ----------------------------------------------------
+        # Build only selected experts
+        # ----------------------------------------------------
 
         self.kernels = nn.ModuleList([
             kernels[name]()
             for name in self.expert_names
         ])
 
+        # ----------------------------------------------------
+        # Number of active experts
+        # ----------------------------------------------------
+
         self.num_paths = len(self.kernels)
+
+    # ========================================================
+    # Full expert execution
+    # ========================================================
 
     def forward(self, x):
 
@@ -109,12 +150,20 @@ class AnisotropicConvSuite(nn.Module):
             for expert in self.kernels
         ]
 
+    # ========================================================
+    # Memory-efficient sequential execution
+    # ========================================================
+
     def forward_sequential(
         self,
         x,
         weights=None,
-        uniform=False
+        uniform=False,
     ):
+
+        # ----------------------------------------------------
+        # Uniform mixture
+        # ----------------------------------------------------
 
         if uniform:
 
@@ -130,19 +179,27 @@ class AnisotropicConvSuite(nn.Module):
 
             return y / self.num_paths
 
-        else:
+        # ----------------------------------------------------
+        # Weighted mixture
+        # ----------------------------------------------------
 
-            y = self.kernels[0](x) * weights[0]
+        if weights is None:
+            raise ValueError(
+                "weights must be provided when uniform=False."
+            )
 
-            for i in range(1, self.num_paths):
+        y = self.kernels[0](x) * weights[0]
 
-                feat = self.kernels[i](x)
+        for i in range(1, self.num_paths):
 
-                y = y + weights[i] * feat
+            feat = self.kernels[i](x)
 
-                del feat
+            y = y + weights[i] * feat
 
-            return y
+            del feat
+
+        return y
+
 
 # ============================================================
 # Window pooling / tokenization
@@ -153,7 +210,7 @@ class WindowPool3D(nn.Module):
     def __init__(
         self,
         window_size=None,
-        shift=False
+        shift=False,
     ):
 
         super().__init__()
@@ -214,9 +271,12 @@ class WindowPool3D(nn.Module):
         x = F.pad(
             x,
             (
-                0, pad_w,
-                0, pad_h,
-                0, pad_d
+                0,
+                pad_w,
+                0,
+                pad_h,
+                0,
+                pad_d,
             )
         )
 
@@ -263,11 +323,14 @@ class WindowPool3D(nn.Module):
             1
         )
 
-        # Only return what the attention block actually needs
+        # ----------------------------------------------------
+        # Return
+        # ----------------------------------------------------
+
         return (
             tokens,
             (Nd, Nh, Nw),
-            (D_pad, H_pad, W_pad)
+            (D_pad, H_pad, W_pad),
         )
 
 
@@ -281,20 +344,22 @@ class KernelMixingAttention(nn.Module):
         self,
         embed_dim,
         num_kernels,
-        num_heads=4
+        num_heads=4,
     ):
 
         super().__init__()
 
+        self.num_kernels = num_kernels
+
         self.attn = nn.MultiheadAttention(
             embed_dim=embed_dim,
             num_heads=num_heads,
-            batch_first=True
+            batch_first=True,
         )
 
         self.proj = nn.Linear(
             embed_dim,
-            num_kernels
+            num_kernels,
         )
 
     def forward(self, tokens):
@@ -302,7 +367,7 @@ class KernelMixingAttention(nn.Module):
         attn_out, _ = self.attn(
             tokens,
             tokens,
-            tokens
+            tokens,
         )
 
         logits = self.proj(attn_out)
@@ -323,27 +388,33 @@ class AnisotropicSwinBlock(nn.Module):
         window_size=None,
         use_attention=True,
         shift=False,
-        experts=None
+        experts=None,
+        num_heads=4,
     ):
 
         super().__init__()
 
         self.use_attention = use_attention
         self.window_size = window_size
+        self.shift = shift
 
         # ----------------------------------------------------
         # Expert suite
         # ----------------------------------------------------
+
         self.conv_suite = AnisotropicConvSuite(
-            in_ch,
-            out_ch,
-            experts=experts
+            in_ch=in_ch,
+            out_ch=out_ch,
+            experts=experts,
         )
 
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # Number of routing channels is derived from the
+        # selected expert configuration.
+        # ----------------------------------------------------
+
         self.num_kernels = self.conv_suite.num_paths
-
-     
-
 
         # ----------------------------------------------------
         # Reduced representation for routing
@@ -357,23 +428,24 @@ class AnisotropicSwinBlock(nn.Module):
         self.reduce = nn.Conv3d(
             in_ch,
             reduced_ch,
-            kernel_size=1
+            kernel_size=1,
         )
 
         # ----------------------------------------------------
         # Routing
         # ----------------------------------------------------
 
-        if use_attention:
+        if self.use_attention:
 
             self.window_pool = WindowPool3D(
-                window_size,
-                shift=False
+                window_size=window_size,
+                shift=shift,
             )
 
             self.attn = KernelMixingAttention(
                 embed_dim=reduced_ch,
-                num_kernels=self.num_kernels
+                num_kernels=self.num_kernels,
+                num_heads=num_heads,
             )
 
         else:
@@ -388,71 +460,83 @@ class AnisotropicSwinBlock(nn.Module):
 
         self.norm = nn.GroupNorm(
             8,
-            out_ch
+            out_ch,
         )
 
         self.act = nn.SiLU()
 
+    # ========================================================
+    # Forward
+    # ========================================================
+
     def forward(
         self,
         x,
-        return_weights=False
+        return_weights=False,
     ):
 
         B, C, D, H, W = x.shape
 
+        # ====================================================
+        # No attention
+        # ====================================================
+
         if not self.use_attention:
 
-            # ----------------------------------------------------
+            # ------------------------------------------------
             # Global learned routing
-            # ----------------------------------------------------
-    
+            # ------------------------------------------------
+
             weights = F.softmax(
                 self.alpha,
-                dim=0
+                dim=0,
             )
-    
-            # ----------------------------------------------------
+
+            # ------------------------------------------------
             # Sequential expert execution
-            # ----------------------------------------------------
-    
+            #
+            # NOTE:
+            # Preserve your previous behavior:
+            # uniform=True means equal weighting.
+            # ------------------------------------------------
+
             y = self.conv_suite.forward_sequential(
                 x,
-                weights,
-                uniform = True
+                weights=weights,
+                uniform=True,
             )
-    
-            # ----------------------------------------------------
+
+            # ------------------------------------------------
             # Normalize + activation
-            # ----------------------------------------------------
-    
+            # ------------------------------------------------
+
             y = self.norm(y)
             y = self.act(y)
-    
-            # ----------------------------------------------------
+
+            # ------------------------------------------------
             # Return
-            # ----------------------------------------------------
-    
+            # ------------------------------------------------
+
             if return_weights:
-    
+
                 weights_spatial = weights.view(
                     1,
                     self.num_kernels,
                     1,
                     1,
-                    1
+                    1,
                 ).expand(
                     B,
                     -1,
                     D,
                     H,
-                    W
+                    W,
                 )
-    
+
                 return y, weights_spatial
-    
+
             return y
-        
+
         # ====================================================
         # High-frequency extraction
         # ====================================================
@@ -463,14 +547,14 @@ class AnisotropicSwinBlock(nn.Module):
                 x,
                 kernel_size=3,
                 stride=1,
-                padding=1
+                padding=1,
             )
         )
 
         hf = torch.clamp(
             hf,
             -3.0,
-            3.0
+            3.0,
         )
 
         # ====================================================
@@ -481,12 +565,12 @@ class AnisotropicSwinBlock(nn.Module):
             x
             - x.mean(
                 dim=(2, 3, 4),
-                keepdim=True
+                keepdim=True,
             )
         ) / (
             x.std(
                 dim=(2, 3, 4),
-                keepdim=True
+                keepdim=True,
             ) + 1e-5
         )
 
@@ -504,14 +588,14 @@ class AnisotropicSwinBlock(nn.Module):
             x,
             scale_factor=(1, 0.5, 0.5),
             mode="trilinear",
-            align_corners=False
+            align_corners=False,
         )
 
         x_small = (
             x_small
             - x_small.mean(
                 dim=(2, 3, 4),
-                keepdim=True
+                keepdim=True,
             )
         )
 
@@ -531,21 +615,21 @@ class AnisotropicSwinBlock(nn.Module):
                 x_low,
                 kernel_size=3,
                 stride=1,
-                padding=1
+                padding=1,
             )
         )
 
         x_low = x_low / (
             x_low.std(
                 dim=(2, 3, 4),
-                keepdim=True
+                keepdim=True,
             ) + 1e-5
         )
 
         x_high = x_high / (
             x_high.std(
                 dim=(2, 3, 4),
-                keepdim=True
+                keepdim=True,
             ) + 1e-5
         )
 
@@ -556,195 +640,158 @@ class AnisotropicSwinBlock(nn.Module):
         # ====================================================
         # EXPERTS
         #
-        # Kept unchanged intentionally.
+        # Number and ordering are determined entirely by
+        # self.conv_suite.expert_names.
         # ====================================================
 
         feats = self.conv_suite(x)
 
-        
         # ====================================================
         # ROUTING
         # ====================================================
 
-        if self.use_attention:
+        (
+            tokens,
+            (Nd, Nh, Nw),
+            (D_pad, H_pad, W_pad),
+        ) = self.window_pool(x_small)
 
-            (
-                tokens,
-                (Nd, Nh, Nw),
-                (D_pad, H_pad, W_pad)
-            ) = self.window_pool(x_small)
+        # ----------------------------------------------------
+        # Attention
+        # ----------------------------------------------------
 
-            # ------------------------------------------------
-            # Attention
-            # ------------------------------------------------
+        logits = self.attn(tokens)
 
-            logits = self.attn(tokens)
+        # ----------------------------------------------------
+        # Restore window → spatial layout
+        #
+        # [B, N_windows, K]
+        # →
+        # [B, Nd, Nh, Nw, K]
+        # ----------------------------------------------------
 
-            # ------------------------------------------------
-            # Restore window → spatial layout
-            # ------------------------------------------------
+        logits = logits.reshape(
+            B,
+            Nd,
+            Nh,
+            Nw,
+            self.num_kernels,
+        )
 
-            logits = logits.reshape(
-                B,
-                Nd,
-                Nh,
-                Nw,
-                self.num_kernels
+        logits = logits.permute(
+            0,
+            4,
+            1,
+            2,
+            3,
+        )
+
+        # ----------------------------------------------------
+        # Restore padded spatial resolution
+        # ----------------------------------------------------
+
+        logits = F.interpolate(
+            logits,
+            size=(
+                D_pad,
+                H_pad,
+                W_pad,
+            ),
+            mode="trilinear",
+            align_corners=False,
+        )
+
+        # ----------------------------------------------------
+        # Crop
+        # ----------------------------------------------------
+
+        logits = logits[
+            :,
+            :,
+            :D_s,
+            :H_s,
+            :W_s,
+        ]
+
+        # ----------------------------------------------------
+        # Upscale routing to feature resolution
+        # ----------------------------------------------------
+
+        logits = F.interpolate(
+            logits,
+            size=(
+                D,
+                H,
+                W,
+            ),
+            mode="trilinear",
+            align_corners=False,
+        )
+
+        # ----------------------------------------------------
+        # Normalize routing logits
+        # ----------------------------------------------------
+
+        logits = (
+            logits
+            - logits.mean(
+                dim=(2, 3, 4),
+                keepdim=True,
             )
+        )
 
-            logits = logits.permute(
-                0,
-                4,
-                1,
-                2,
-                3
-            )
+        logits = logits / (
+            logits.std(
+                dim=1,
+                keepdim=True,
+            ) + 1e-5
+        )
 
-            # ------------------------------------------------
-            # Restore padded spatial resolution
-            # ------------------------------------------------
+        # ----------------------------------------------------
+        # Stochastic symmetry breaking
+        # ----------------------------------------------------
 
-            logits = F.interpolate(
-                logits,
-                size=(
-                    D_pad,
-                    H_pad,
-                    W_pad
-                ),
-                mode="trilinear",
-                align_corners=False
-            )
-
-            # ------------------------------------------------
-            # Crop
-            # ------------------------------------------------
-
-            logits = logits[
-                :,
-                :,
-                :D_s,
-                :H_s,
-                :W_s
-            ]
-
-            # ------------------------------------------------
-            # Upscale routing to feature resolution
-            # ------------------------------------------------
-
-            logits = F.interpolate(
-                logits,
-                size=(
-                    D,
-                    H,
-                    W
-                ),
-                mode="trilinear",
-                align_corners=False
-            )
-
-            # ------------------------------------------------
-            # Feature strength
-            # ------------------------------------------------
-
-            # feat_strength = x_small.abs().mean(
-            #     dim=1,
-            #     keepdim=True
-            # )
-
-            # feat_strength = F.interpolate(
-            #     feat_strength,
-            #     size=logits.shape[2:],
-            #     mode="trilinear",
-            #     align_corners=False
-            # )
-
-            # logits = (
-            #     logits
-            #     + 0.3 * feat_strength
-            # )
-
-            # ------------------------------------------------
-            # Normalize routing logits
-            # ------------------------------------------------
+        if self.training:
 
             logits = (
                 logits
-                - logits.mean(
-                    dim=(2, 3, 4),
-                    keepdim=True
-                )
+                + 0.01 * torch.randn_like(logits)
             )
 
-            logits = logits / (
-                logits.std(
-                    dim=1,
-                    keepdim=True
-                ) + 1e-5
-            )
+        # ----------------------------------------------------
+        # Convert logits → routing weights
+        # ----------------------------------------------------
 
-            # ------------------------------------------------
-            # Stochastic symmetry breaking
-            #
-            # Kept because this changes training behavior.
-            # ------------------------------------------------
-            if self.training:
-    
-                logits = (
-                    logits
-                    + 0.01 * torch.randn_like(logits)
-                )
-
-            weights = F.softmax(
-                logits / 0.8,
-                dim=1
-            )
-
-        else:
-
-            # ------------------------------------------------
-            # Global learned routing
-            # ------------------------------------------------
-
-            weights = F.softmax(
-                self.alpha,
-                dim=0
-            )
-
-            weights = weights.view(
-                1,
-                self.num_kernels,
-                1,
-                1,
-                1
-            )
-
-            weights = weights.expand(
-                B,
-                -1,
-                D,
-                H,
-                W
-            )
+        weights = F.softmax(
+            logits / 0.8,
+            dim=1,
+        )
 
         # ====================================================
         # Expert mixing
-        #
-        # Avoid an unnecessary zeros_like allocation.
         # ====================================================
+
+        # ----------------------------------------------------
+        # Start with first expert
+        # ----------------------------------------------------
 
         y = (
             weights[:, 0:1]
             * feats[0]
         )
 
+        # ----------------------------------------------------
+        # Add remaining experts
+        # ----------------------------------------------------
+
         for i in range(
             1,
-            self.num_kernels
+            self.num_kernels,
         ):
 
             y = (
                 y
-                + weights[:, i:i+1]
+                + weights[:, i:i + 1]
                 * feats[i]
             )
 
@@ -755,6 +802,10 @@ class AnisotropicSwinBlock(nn.Module):
         y = self.act(
             self.norm(y)
         )
+
+        # ====================================================
+        # Return
+        # ====================================================
 
         if return_weights:
 
@@ -775,7 +826,7 @@ class SpatialDownsample3D(nn.Module):
 
         self.pool = nn.AvgPool3d(
             kernel_size=(1, 2, 2),
-            stride=(1, 2, 2)
+            stride=(1, 2, 2),
         )
 
     def forward(self, x):
