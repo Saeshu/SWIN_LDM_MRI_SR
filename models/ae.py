@@ -128,19 +128,6 @@ class AutoEncoder(nn.Module):
             experts=self.encoder_experts,
         )
 
-        # --------------------------------------------------------
-        # Latent projection
-        #
-        # Currently retained exactly as before.
-        # NOTE: It is not currently used in encode().
-        # --------------------------------------------------------
-
-        self.latent_proj = nn.Conv3d(
-            256,
-            4,
-            kernel_size=1,
-        )
-
         # ========================================================
         # DECODER
         # ========================================================
